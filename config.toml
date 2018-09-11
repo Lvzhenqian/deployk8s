@@ -1,0 +1,30 @@
+# 测试token，无需修改。
+BOOTSTRAP_TOKEN = "73f97aad8cc1023ecfa37e4adf919738"
+
+[NODES]
+# 内网apiserver地址，请选择其中一台安装
+APISERVER = "192.168.8.231"
+APISERVER_URL= "https://192.168.8.231:6443"
+
+[NODES.IPS]
+# 左边填写内网地址，右边填写对应的外网ip
+"192.168.8.231" = "192.168.8.231"
+
+[EXTENDNODE]
+# 增加的node不会安装 master 节点与etcd等程序，其依赖原有的k8s集群
+"192.168.8.234" = "192.168.8.234"
+
+[SHRINKNODE]
+# 无法删除etcd与nfs节点。
+NODES=[ "192.168.8.231" ]
+
+[SSH_SETTING]
+# ssh登陆端口，账号密码，请统一一个
+SSH_PORT = "22"
+SSH_USER = "root"
+SSH_PASSWORD = "hd8832508"
+
+[ETCD]
+# k8s数据集群地址，请填内网地址。
+IPS = [ "192.168.8.231" ]
+
