@@ -1,30 +1,62 @@
-# 测试token，无需修改。
-BOOTSTRAP_TOKEN = "73f97aad8cc1023ecfa37e4adf919738"
+[Kubeconf]
+Version = "1.13.2"
+# 客户端访问apiserver的url地址,如果使用haproxy请配置端口非6443默认值。
+LoadBalancer= "192.168.8.231:5443"
+# services地址范围
+ServiceCidr = "10.254.0.0/16"
+# PodIP地址范围
+PodCidr = "172.30.0.0/16"
+# apiserver http端口
+InsecurePort = "8080"
+# k8s nodePort地址范围
+NodePortRang = "80-39000"
+# 安装的docker版本号
+DockerVersion = "3:docker-ce-18.09.2-3.el7.x86_64"
+# docker 数据目录
+DockerData = '/data/docker'
+# etcd数据目录
+EtcdData = "/data/etcd"
+# kube-proxy 模式 ipvs|iptables
+ProxyMode = "ipvs"
+# helm 版本号
+HelmVersion = "v2.12.1"
+# NodeName 前缀，不能留空，增加节点时会使用到
+Perfix = "k8s-"
+# Calico MTU值 （阿里云1440|京东云1430）
+MTU = "1430"
+# 增加节点时要使用token 与证书hash值，部署时不必填写，部署完成后会回写配置文件。
+Token = ""
+CertHash = ""
 
-[NODES]
-# 内网apiserver地址，请选择其中一台安装
-APISERVER = "192.168.8.231"
-APISERVER_URL= "https://192.168.8.231:6443"
+[HA]
+# 是否使用keepalived 与haproxy,已经有负载均衡器的请填0.
+# keepalived 只会安装在master机器上
+Enable = 0
+# keepalived网卡名，用于keepalived的配置文件
+# 所有master节点请统一一个网卡命名
+InterfaceName = "eth0"
+# vip 地址，LoadBalancer 解析到的IP地址
+vip = "192.168.8.231"
 
-[NODES.IPS]
-# 左边填写内网地址，右边填写对应的外网ip
-"192.168.8.231" = "192.168.8.231"
-
-[EXTENDNODE]
-# 增加的node不会安装 master 节点与etcd等程序，其依赖原有的k8s集群
-"192.168.8.234" = "192.168.8.234"
-
-[SHRINKNODE]
-# 无法删除etcd与nfs节点。
-NODES=[ "192.168.8.231" ]
-
-[SSH_SETTING]
-# ssh登陆端口，账号密码，请统一一个
-SSH_PORT = "22"
-SSH_USER = "root"
-SSH_PASSWORD = "hd8832508"
-
-[ETCD]
-# k8s数据集群地址，请填内网地址。
+[Master]
+# k8s master集群地址
 IPS = [ "192.168.8.231" ]
 
+[Node]
+# K8s Node节点配置，左边是服务器ip地址，右边是节点名称.
+# 右边前缀表示部署的 label属性，会在matchvs脚本里打label到node上
+# matchvs表示引擎，gs表示gameserver服务器
+"192.168.8.231" = "matchvs-192.168.8.231"
+"192.168.8.232" = "gs-192.168.8.231"
+
+[Ssh]
+# ssh登陆端口，账号密码，请统一一个
+Port = 22
+# 用户名请默认填root
+Username = "root"
+# root密码
+Password = "hd8832508"
+# （测试）使用私钥连接
+Pkey = ""
+# （测试）私钥密码
+Pkeypass = ""

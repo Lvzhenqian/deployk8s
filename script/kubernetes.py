@@ -1,532 +1,422 @@
 #!/usr/bin/env python
 # coding:utf-8
-import  multiprocessing,os,json,sys
-
-from functools import wraps
+import os, toml, yaml, time
+from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from .Base import BaseObject
-from tempfile import mktemp
+from copy import copy
 
 
-Locker = multiprocessing.Lock()
-def templates(fn):
-    @wraps(fn)
-    def wrap(*args, **kwargs):
-        with Locker:
-            if os.path.exists(BaseObject.tmp):
-                os.chdir(BaseObject.tmp)
-            else:
-                os.makedirs(BaseObject.tmp)
-                os.chdir(BaseObject.tmp)
-            for files in os.listdir(BaseObject.tmp):
-                os.remove(files)
-            ret = fn(*args, **kwargs)
-            for files in os.listdir(BaseObject.tmp):
-                os.remove(files)
-            return ret
-
-    return wrap
 class kubernetes(BaseObject):
 
-    def _docker(self, node_ip):
-        self.logger.info(u"{ip}安装docker！！".format(ip=node_ip))
-        ssh = self.SSH(node_ip)
-        ssh.do_script('/bin/bash %s'%os.path.join(kubernetes.KUBE_BINS,'env.sh'), timeout=3600)
-        ssh.mkdirs(kubernetes.DOCKER_DATA)
-        cmd2 = "sed -i 's@^ExecStart.*$@ExecStart=/usr/bin/dockerd --data-root {docker} --log-level=info@' " \
-               "/lib/systemd/system/docker.service".format(docker=kubernetes.DOCKER_DATA)
-        ssh.runner(cmd2)
-        ssh.runner('systemctl daemon-reload')
-        ssh.runner('systemctl restart docker')
-        ssh.runner('systemctl status docker')
-        self._Systemd_Check(node_ip, 'docker')
+    def Env(self, ip):
+        ssh = self.SSH(ip)
+        ssh.push(os.path.join(self.ScriptPath, "k8s/init/env.sh"), '/tmp/env.sh', ip)
+        ssh.do_script('/bin/bash /tmp/env.sh')
+        return "%s done" % ip
 
-    def load_env(self):
+    def __RestartServer(self, ip):
+        self.logger.info(u"%s 服务器即将重启!!", ip)
+        with self.SSH(ip) as ssh:
+            return ssh.runner("reboot")
 
-        self.logger.info(u"复制BIN文件！！")
-        for ip in self.ALL_IP:
-            ssh = self.SSH(ip)
-            ssh.mkdirs(kubernetes.KUBE_BINS)
-            ssh.mkdirs(kubernetes.KUBE_SSL)
-            self._SSL_sender(os.path.join(self.ScriptPath, 'k8s/all'), kubernetes.KUBE_BINS, ip)
-            self._docker(ip)
-            ssh.runner("chmod a+x %s/*" % kubernetes.KUBE_BINS)
+    def __kubeadm(self, ip, shell):
+        ssh = self.SSH(ip)
+        ssh.push(shell, '/tmp/kubeadm.sh', ip)
+        ssh.mkdirs(self.DockerData)
+        ssh.do_script('/bin/bash /tmp/kubeadm.sh')
+        return "%s done" % ip
 
-    @templates
-    def make_CA_files(self):
-        self.logger.debug(u"生成CA证书！！")
-        sslpath = mktemp()
-        CA_CONFIG = {"signing": {"default": {"expiry": "8760h"}, "profiles": {"kubernetes": {"expiry": "8760h",
-                                                                                             "usages": ["signing",
-                                                                                                        "key encipherment",
-                                                                                                        "server auth",
-                                                                                                        "client auth"]}}}}
-        CA_CSR = {"CN": "kubernetes", "key": {"algo": "rsa", "size": 2048},
-                  "names": [{"C": "CN", "L": "BeiJing", "ST": "BeiJing", "O": "k8s", "OU": "System"}]}
-        with open('./ca-config.json', mode='w') as ca_conf:
-            json.dump(CA_CONFIG, ca_conf)
-        with open('./ca-csr.json', mode='w') as ca_csr:
-            json.dump(CA_CSR, ca_csr)
-        client = self.cfg['ETCD']['IPS'][0]
-        ssh = self.SSH(client)
-        remote = mktemp()
-        ssh.mkdirs(remote)
-        self._SSL_sender(kubernetes.tmp, remote, client)
-        cmd = "cd {tmp} && {KUBE_BINS}/cfssl gencert -initca ca-csr.json | {KUBE_BINS}/cfssljson -bare ca".format(
-            tmp=remote, KUBE_BINS=kubernetes.KUBE_BINS)
-        ssh.runner(cmd)
-        if os.path.exists(sslpath):
-            for files in os.listdir(sslpath):
-                os.remove(os.path.join(sslpath, files))
-        ssh.get_all(remote, sslpath)
-        del ssh
-        for files in os.listdir(sslpath):
-            for ip in self.ALL_IP:
-                ssh = self.SSH(ip)
-                ssh.mkdirs(kubernetes.KUBE_SSL)
-                src = os.path.join(sslpath, files)
-                dst = os.path.join(kubernetes.KUBE_SSL, files)
-                self.logger.debug("src:%s --> dst:%s ip:%s" % (src, dst, ip))
-                ssh.push(src, dst, ip)
-
-    @templates
-    def _etcd(self, node_name, node_ip):
-        self.logger.debug(u"{ip}: 安装etcd ！！".format(ip=node_ip))
-        j = {"CN": "etcd", "hosts": ["127.0.0.1", str(node_ip)], "key": {"algo": "rsa", "size": 2048},
-             "names": [{"C": "CN", "ST": "BeiJing", "L": "BeiJing", "O": "k8s", "OU": "System"}]}
-        self.logger.debug(j)
-        with open('./etcd-csr.json', mode='w') as jsfile:
-            json.dump(j, jsfile)
-        unit = '''[Unit]
-Description=Etcd with docker
-After=network.target
-After=network-online.target
-Wants=network-online.target
-Documentation=https://github.com/coreos
-
-[Service]
-Restart=always
-RestartSec=5s
-TimeoutStartSec=0
-LimitNOFILE=65536
-ExecStart=/usr/bin/docker run \\
-  --rm \\
-  --net=host \\
-  --name etcd-v3.3.9 \\
-  --volume={ETCD_DATA}:/etcd-data \\
-  --volume={KUBE_SSL}:/ssl \\
-  registry.matchvs.com/k8s/etcd:v3.3.9 \\
-  /usr/local/bin/etcd \\
-  --name {NODE_NAME} \\
-  --data-dir /etcd-data \\
-  --listen-client-urls https://{NODE_IP}:2379 \\
-  --advertise-client-urls https://{NODE_IP}:2379 \\
-  --listen-peer-urls https://{NODE_IP}:2380 \\
-  --initial-advertise-peer-urls https://{NODE_IP}:2380 \\
-  --initial-cluster {ETCD_NODES} \\
-  --initial-cluster-token Matchvs-etcd-cluster \\
-  --initial-cluster-state new \\
-  --client-cert-auth \\
-  --trusted-ca-file /ssl/ca.pem \\
-  --cert-file /ssl/etcd.pem \\
-  --key-file /ssl/etcd-key.pem \\
-  --peer-client-cert-auth \\
-  --peer-trusted-ca-file /ssl/ca.pem \\
-  --peer-cert-file /ssl/etcd.pem \\
-  --peer-key-file /ssl/etcd-key.pem 
-ExecStop=/usr/bin/docker stop etcd-v3.3.9
-[Install]
-WantedBy=multi-user.target'''.format(ETCD_NODES=','.join(self.etcd_node), ETCD_DATA=kubernetes.ETCD_DATA,
-                                     KUBE_SSL=kubernetes.KUBE_SSL, NODE_IP=node_ip, NODE_NAME=node_name)
-        with open('./etcd.service', mode='w') as fd:
-            fd.write(unit)
-        cmd = 'cd {KUBE_SSL} && {KUBE_BINS}/cfssl gencert -ca={KUBE_SSL}/ca.pem -ca-key={KUBE_SSL}/ca-key.pem ' \
-              '-config={KUBE_SSL}/ca-config.json ' \
-              '-profile=kubernetes {KUBE_SSL}/etcd-csr.json | {KUBE_BINS}/cfssljson -bare etcd '.format(
-            KUBE_SSL=kubernetes.KUBE_SSL, KUBE_BINS=kubernetes.KUBE_BINS)
-        ssh = self.SSH(node_ip)
-        ssh.mkdirs(kubernetes.ETCD_DATA)
-        self._SSL_sender(self.tmp, kubernetes.KUBE_SSL, node_ip)
-        ssh.runner(cmd)
-        ssh.runner('systemctl daemon-reload')
-        ssh.runner('systemctl start etcd')
-        ssh.runner('systemctl enable etcd')
-
-    @templates
-    def make_kubectl(self):
-        self.logger.info(u"安装kubctl命令行工具！！")
-        js = {"CN": "admin", "hosts": [], "key": {"algo": "rsa", "size": 2048},
-              "names": [{"C": "CN", "ST": "BeiJing", "L": "BeiJing", "O": "system:masters", "OU": "System"}]}
-        with open('./admin-csr.json', mode='w') as fd:
-            json.dump(js, fd)
-        cmd = "cd {KUBE_SSL} && {KUBE_BINS}/cfssl gencert -ca={KUBE_SSL}/ca.pem -ca-key={KUBE_SSL}/ca-key.pem" \
-              " -config={KUBE_SSL}/ca-config.json " \
-              "-profile=kubernetes {KUBE_SSL}/admin-csr.json | {KUBE_BINS}/cfssljson -bare admin".format(
-            KUBE_SSL=kubernetes.KUBE_SSL, KUBE_BINS=kubernetes.KUBE_BINS)
-
-        cmd1 = "{KUBE_BINS}/kubectl config set-cluster kubernetes --certificate-authority={KUBE_SSL}/ca.pem " \
-               "--embed-certs=true --server={KUBE_APISERVER} ".format(KUBE_SSL=kubernetes.KUBE_SSL,
-                                                                      KUBE_BINS=kubernetes.KUBE_BINS,
-                                                                      KUBE_APISERVER=self.cfg['NODES']['APISERVER_URL'])
-        cmd2 = "{KUBE_BINS}/kubectl config set-credentials admin --client-certificate={KUBE_SSL}/admin.pem " \
-               "--embed-certs=true --client-key={KUBE_SSL}/admin-key.pem --token={BOOTSTRAP_TOKEN} ".format(
-            KUBE_SSL=kubernetes.KUBE_SSL,
-            KUBE_BINS=kubernetes.KUBE_BINS,
-            BOOTSTRAP_TOKEN=self.cfg['BOOTSTRAP_TOKEN'])
-        cmd3 = "{KUBE_BINS}/kubectl config set-context kubernetes --cluster=kubernetes --user=admin".format(
-            KUBE_BINS=kubernetes.KUBE_BINS)
-        cmd4 = "{KUBE_BINS}/kubectl config use-context kubernetes".format(KUBE_BINS=kubernetes.KUBE_BINS)
-
-        pathload = 'echo "export PATH=\$PATH:%s" >> /root/.bashrc' % kubernetes.KUBE_BINS
-        for ip in self.ALL_IP:
-            self._SSL_sender(kubernetes.tmp, kubernetes.KUBE_SSL, ip)
-        else:
-            for ip in self.ALL_IP:
-                ssh = self.SSH(ip)
+    def __SetHostName(self, ip):
+        self.logger.info(u"%s 即将配置并修改hosts文件，旧hosts保存为 /etc/hosts_old !!" % ip)
+        hostname = self.Perfix + self.Nodes[ip]
+        hosts = '\n'.join([" ".join((node, self.Perfix + name)) for node, name in self.Nodes.items()])
+        header = '''127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6\n'''
+        setname = "hostnamectl set-hostname %s" % hostname
+        BackupHosts = "/bin/cp -rf /etc/hosts /etc/hosts_old"
+        InsertHosts = 'echo "{}" > /etc/hosts'.format(header + hosts)
+        with self.SSH(ip) as ssh:
+            for cmd in (setname, BackupHosts, InsertHosts):
                 ssh.runner(cmd)
-                ssh.runner(cmd1)
-                ssh.runner(cmd2)
-                ssh.runner(cmd3)
-                ssh.runner(cmd4)
-                ssh.runner(pathload)
 
-    @templates
-    def _apiserver(self, node_ip):
-        self.logger.info(u"{ip}安装apiserver！！".format(ip=node_ip))
-        js = {"CN": "kubernetes", "hosts": [
-            "127.0.0.1", node_ip, self.cfg['NODES']['APISERVER'],
-            kubernetes.CLUSTER_DNS_SVC_IP,
-            kubernetes.CLUSTER_KUBERNETES_SVC_IP, "kubernetes",
-            "kubernetes.default", "kubernetes.default.svc", "kubernetes.default.svc.cluster",
-            "kubernetes.default.svc.cluster.local"],
-              "key": {"algo": "rsa", "size": 2048},
-              "names": [{"C": "CN", "ST": "BeiJing", "L": "BeiJing", "O": "k8s", "OU": "System"}]}
-        with open('./kubernetes-csr.json', mode='w') as fd:
-            json.dump(js, fd)
-        with open('./token.csv', mode='w') as fd:
-            fd.write('{BOOTSTRAP_TOKEN},kubelet-bootstrap,10001,"system:kubelet-bootstrap"'.format(
-                BOOTSTRAP_TOKEN=self.cfg['BOOTSTRAP_TOKEN']))
-        unit = '''[Unit]
-Description=Kubernetes API Server
-Documentation=https://github.com/GoogleCloudPlatform/kubernetes
-After=network.target
-[Service]
-ExecStart={KUBE_BINS}/kube-apiserver \\
-  --admission-control=NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,ResourceQuota \\
-  --advertise-address={NODE_IP} \\
-  --bind-address={NODE_IP} \\
-  --secure-port={secure_port} \\
-  --insecure-bind-address={NODE_IP} \\
-  --insecure-port={insecure_port} \\
-  --authorization-mode=Node,RBAC \\
-  --runtime-config=rbac.authorization.k8s.io/v1alpha1 \\
-  --kubelet-https=true \\
-  --enable-bootstrap-token-auth \\
-  --token-auth-file={KUBE_SSL}/token.csv \\
-  --service-cluster-ip-range={SERVICE_CIDR} \\
-  --service-node-port-range={NODE_PORT_RANGE} \\
-  --tls-cert-file={KUBE_SSL}/kubernetes.pem \\
-  --tls-private-key-file={KUBE_SSL}/kubernetes-key.pem \\
-  --client-ca-file={KUBE_SSL}/ca.pem \\
-  --service-account-key-file={KUBE_SSL}/ca-key.pem \\
-  --etcd-cafile={KUBE_SSL}/ca.pem \\
-  --etcd-certfile={KUBE_SSL}/kubernetes.pem \\
-  --etcd-keyfile={KUBE_SSL}/kubernetes-key.pem \\
-  --etcd-servers={ETCD_ENDPOINTS} \\
-  --enable-swagger-ui=true \\
-  --allow-privileged=true \\
-  --apiserver-count=2 \\
-  --audit-log-maxage=30 \\
-  --audit-log-maxbackup=3 \\
-  --audit-log-maxsize=100 \\
-  --audit-log-path=/var/log/audit.log \\
-  --audit-policy-file={KUBE_BINS}/audit-policy.yaml \\
-  --event-ttl=1h \\
-  --logtostderr=true \\
-  --v=0
-Restart=on-failure
-RestartSec=5
-Type=notify
-LimitNOFILE=65536
-[Install]
-WantedBy=multi-user.target'''.format(NODE_IP=node_ip, KUBE_BINS=kubernetes.KUBE_BINS, KUBE_SSL=kubernetes.KUBE_SSL,
-                                     ETCD_ENDPOINTS=','.join(self.etcd_endpoint),
-                                     NODE_PORT_RANGE=kubernetes.NODE_PORT_RANGE,
-                                     SERVICE_CIDR=kubernetes.SERVICE_CIDR,
-                                     insecure_port=kubernetes.insecure_port,
-                                     secure_port=kubernetes.secure_port)
-        with open('./kube-apiserver.service', mode='w') as fd:
-            fd.write(unit)
-        cmd = 'cd {KUBE_SSL} && {KUBE_BINS}/cfssl gencert -ca={KUBE_SSL}/ca.pem -ca-key={KUBE_SSL}/ca-key.pem ' \
-              '-config={KUBE_SSL}/ca-config.json ' \
-              '-profile=kubernetes kubernetes-csr.json | {KUBE_BINS}/cfssljson -bare kubernetes '.format(
-            KUBE_SSL=kubernetes.KUBE_SSL, KUBE_BINS=kubernetes.KUBE_BINS)
-        self._SSL_sender(kubernetes.tmp, kubernetes.KUBE_SSL, node_ip)
-        self._SSL_sender(os.path.join(self.ScriptPath, 'k8s/master'), kubernetes.KUBE_BINS, node_ip)
-        ssh = self.SSH(node_ip)
-        ssh.runner("chmod a+x %s/*" % kubernetes.KUBE_BINS)
-        msg, state = ssh.runner(cmd)
-        self.logger.debug(msg)
-        ssh.runner('systemctl daemon-reload')
-        ssh.runner('systemctl start kube-apiserver')
-        ssh.runner('systemctl enable kube-apiserver')
-        ssh.runner('systemctl status kube-apiserver')
-        self._Systemd_Check(node_ip, 'kube-apiserver')
+    def __CreateConfig(self):
+        name, _ = self.LoadBalancer.split(':')
+        certs = set(self.Masters)
+        certs.add(name)
+        ClusterConfig = dict(apiVersion='kubeadm.k8s.io/v1beta1', kind='ClusterConfiguration',
+                             etcd=dict(local=dict(imageRepository='mirrorgooglecontainers', imageTag='3.2.24',
+                                                  dataDir='/data/etcd')),
+                             networking=dict(serviceSubnet=self.ServiceCidr, podSubnet=self.PodCidr),
+                             dns=dict(type='CoreDNS', imageRepository='coredns'), kubernetesVersion=self.Version,
+                             controlPlaneEndpoint=self.LoadBalancer,
+                             apiServer=dict(
+                                 extraArgs={
+                                     'authorization-mode': 'Node,RBAC',
+                                     'insecure-port': "%s" % self.InsecurePort,
+                                     'service-node-port-range': self.NodePortRang
+                                 },
+                                 certSANs=list(certs),
+                                 timeoutForControlPlane='4m0s'),
+                             imageRepository='mirrorgooglecontainers',
+                             useHyperKubeImage=False, clusterName='kubernetes')
+        KubeProxy = dict(apiVersion='kubeproxy.config.k8s.io/v1alpha1',
+                         kind='KubeProxyConfiguration',
+                         mode=self.ProxyMode)
+        os.mkdir(self.tmp)
+        InitConfig = os.path.join(self.tmp, 'k8s.yaml')
+        with open(InitConfig, mode='w') as f:
+            yaml.safe_dump_all([ClusterConfig, KubeProxy], stream=f, encoding="utf-8", allow_unicode=True,
+                               default_flow_style=False)
+        return InitConfig
 
-    @templates
-    def _controller_manager(self, node_ip):
-        self.logger.info(u"{ip}安装controller_manager！！".format(ip=node_ip))
-        unit = '''[Unit]
-Description=Kubernetes Controller Manager
-Documentation=https://github.com/GoogleCloudPlatform/kubernetes
-[Service]
-ExecStart={KUBE_BINS}/kube-controller-manager \\
-  --address=127.0.0.1 \\
-  --master=http://{MASTER_URL}:{insecure_port} \\
-  --allocate-node-cidrs=true \\
-  --feature-gates=RotateKubeletServerCertificate=true \\
-  --controllers=*,bootstrapsigner,tokencleaner \\
-  --service-cluster-ip-range={SERVICE_CIDR} \\
-  --cluster-cidr={CLUSTER_CIDR} \\
-  --cluster-name=kubernetes \\
-  --cluster-signing-cert-file={KUBE_SSL}/ca.pem \\
-  --cluster-signing-key-file={KUBE_SSL}/ca-key.pem \\
-  --service-account-private-key-file={KUBE_SSL}/ca-key.pem \\
-  --root-ca-file={KUBE_SSL}/ca.pem \\
-  --leader-elect=true \\
-  --v=1
-Restart=on-failure
-RestartSec=5
-[Install]
-WantedBy=multi-user.target'''.format(KUBE_BINS=kubernetes.KUBE_BINS, KUBE_SSL=kubernetes.KUBE_SSL,
-                                     MASTER_URL=self.cfg['NODES']['APISERVER'],
-                                     CLUSTER_CIDR=kubernetes.CLUSTER_CIDR,
-                                     SERVICE_CIDR=kubernetes.SERVICE_CIDR,
-                                     insecure_port=kubernetes.insecure_port)
-        with open('./kube-controller-manager.service', mode='w') as fd:
-            fd.write(unit)
-        ssh = self.SSH(node_ip)
-        self._SSL_sender(kubernetes.tmp, kubernetes.KUBE_SSL, node_ip)
-        ssh.runner('systemctl daemon-reload')
-        ssh.runner('systemctl start kube-controller-manager')
-        ssh.runner('systemctl enable kube-controller-manager')
-        ssh.runner('systemctl status kube-controller-manager')
-        self._Systemd_Check(node_ip, 'kube-controller-manager')
+    def __InitCluster(self, ip):
+        config = self.__CreateConfig()
+        ssh = self.SSH(ip)
+        ssh.push(config, '/root/k8s.yaml', ip)
+        ssh.do_script("kubeadm init --config /root/k8s.yaml")
+        ssh.runner("/bin/cp -rf /etc/kubernetes/admin.conf /root/.kube/config")
+        ret, _ = ssh.runner("kubeadm token create --ttl 0 --print-join-command")
+        # self.logger.debug(ret)
+        _, _, _, _, token, _, Certhash = ret.split()
+        return token, Certhash.strip("\r\n")
 
-    @templates
-    def _scheduler(self, node_ip):
-        self.logger.info(u"{ip}安装scheduler！！".format(ip=node_ip))
-        unit = '''[Unit]
-Description=Kubernetes Scheduler
-Documentation=https://github.com/GoogleCloudPlatform/kubernetes
-[Service]
-ExecStart={KUBE_BINS}/kube-scheduler \\
-  --address=127.0.0.1 \\
-  --master=http://{MASTER_URL}:{insecure_port} \\
-  --leader-elect=true \\
-  --v=1
-Restart=on-failure
-RestartSec=5
-[Install]
-WantedBy=multi-user.target'''.format(KUBE_BINS=kubernetes.KUBE_BINS, MASTER_URL=self.cfg['NODES']['APISERVER'],
-                                     insecure_port=kubernetes.insecure_port)
+    def __Kubeconfig(self):
+        self.logger.info(u"复制kubeconfig 到$HOME/.kube/config")
+        for ip in self.Masters:
+            with self.SSH(ip) as ssh:
+                ssh.mkdirs("/root/.kube")
+                ssh.runner("/bin/cp -rf /etc/kubernetes/admin.conf /root/.kube/config")
+                ssh.runner("chown root.root $HOME/.kube/config")
 
-        with open('./kube-scheduler.service', mode='w') as fd:
-            fd.write(unit)
-        ssh = self.SSH(node_ip)
-        self._SSL_sender(kubernetes.tmp, kubernetes.KUBE_SSL, node_ip)
-        ssh.runner('systemctl daemon-reload')
-        ssh.runner('systemctl start kube-scheduler')
-        ssh.runner('systemctl enable kube-scheduler')
-        ssh.runner('systemctl status kube-scheduler')
-        self._Systemd_Check(node_ip, 'kube-scheduler')
+    def __CopyCrts(self, master, IpList):
 
-    @templates
-    def _kubelet(self, node_ip):
-        self.logger.info(u"{ip}安装kubelet！！".format(ip=node_ip))
-        ssh = self.SSH(node_ip)
-        cmd1 = "{KUBE_BINS}/kubectl config set-cluster kubernetes --certificate-authority={KUBE_SSL}/ca.pem " \
-               "--embed-certs=true " \
-               "--server={KUBE_APISERVER} --kubeconfig={KUBE_SSL}/bootstrap.kubeconfig ".format(
-            KUBE_SSL=kubernetes.KUBE_SSL, KUBE_BINS=kubernetes.KUBE_BINS,
-            KUBE_APISERVER=self.cfg['NODES']['APISERVER_URL'])
-        cmd2 = "{KUBE_BINS}/kubectl config set-credentials kubelet-bootstrap --token={BOOTSTRAP_TOKEN} " \
-               "--kubeconfig={KUBE_SSL}/bootstrap.kubeconfig".format(KUBE_SSL=kubernetes.KUBE_SSL,
-                                                                     KUBE_BINS=kubernetes.KUBE_BINS,
-                                                                     BOOTSTRAP_TOKEN=self.cfg['BOOTSTRAP_TOKEN'])
-        cmd3 = "{KUBE_BINS}/kubectl config set-context default --cluster=kubernetes --user=kubelet-bootstrap " \
-               "--kubeconfig={KUBE_SSL}/bootstrap.kubeconfig ".format(KUBE_SSL=kubernetes.KUBE_SSL,
-                                                                      KUBE_BINS=kubernetes.KUBE_BINS)
-        cmd4 = "{KUBE_BINS}/kubectl config use-context default --kubeconfig={KUBE_SSL}/bootstrap.kubeconfig".format(
-            KUBE_SSL=kubernetes.KUBE_SSL, KUBE_BINS=kubernetes.KUBE_BINS)
-        ssh.runner(cmd1)
-        ssh.runner(cmd2)
-        ssh.runner(cmd3)
-        ssh.runner(cmd4)
-        unit = '''[Unit]
-Description=Kubernetes Kubelet
-Documentation=https://github.com/GoogleCloudPlatform/kubernetes
-After=docker.service
-Requires=docker.service
-[Service]
-WorkingDirectory={KUBELET_DATA}
-ExecStart={KUBE_BINS}/kubelet \\
-  --hostname-override=matchvs-{ExternalIP} \\
-  --bootstrap-kubeconfig={KUBE_SSL}/bootstrap.kubeconfig \\
-  --kubeconfig={KUBE_SSL}/kubelet.kubeconfig \\
-  --root-dir={KUBELET_DATA} \\
-  --register-node \\
-  --pod-infra-container-image registry.matchvs.com/k8s/pause:3.1 \\
-  --cert-dir={KUBE_SSL} \\
-  --config={KUBE_SSL}/kubelet.config.json
-  --logtostderr=true \\
-  --network-plugin=cni \\
-  --cni-conf-dir=/etc/cni/net.d \\
-  --cni-bin-dir=/opt/cni/bin \\
-  --v=1
-Restart=on-failure
-RestartSec=5
-[Install]
-WantedBy=multi-user.target'''.format(ExternalIP=self.cfg['NODES']['IPS'][node_ip],
-                                     KUBE_BINS=kubernetes.KUBE_BINS, KUBE_SSL=kubernetes.KUBE_SSL,
-                                     KUBELET_DATA=kubernetes.KUBELET_DATA)
-        with open('./kubelet.service', mode='w') as fd:
-            fd.write(unit)
-        config = dict(kind="KubeletConfiguration",
-                      apiVersion="kubelet.config.k8s.io/v1beta1",
-                      authentication=dict(x509=dict(clientCAFile="%s/ca.pem" % kubernetes.KUBE_SSL),
-                                          webhook=dict(enabled=False,cacheTTL= "2m0s"),anonymous=dict(enabled=True)),
-                      authorization=dict(mode="AlwaysAllow",webhook=dict(cacheAuthorizedTTL="5m0s",cacheUnauthorizedTTL="30s")),
-                      address=node_ip,port=10250,readOnlyPort=10255,cgroupDriver="cgroupfs",hairpinMode="promiscuous-bridge",
-                      serializeImagePulls=False,RotateCertificates=True,
-                      featureGates=dict(RotateKubeletClientCertificate= True,RotateKubeletServerCertificate= True),
-                      MaxPods="512", failSwapOn=False, containerLogMaxSize="1Gi", containerLogMaxFiles=3,
-                      clusterDomain="cluster.local.", clusterDNS=[kubernetes.CLUSTER_DNS_SVC_IP])
-        with open('./kubelet.config.json',mode='w') as cfg:
-            json.dump(config,cfg)
-        ssh = self.SSH(node_ip)
-        self._SSL_sender(kubernetes.tmp, kubernetes.KUBE_SSL, node_ip)
-        self._SSL_sender(os.path.join(self.ScriptPath, 'k8s/nodes'), kubernetes.KUBE_BINS, node_ip)
-        ssh.runner("chmod a+x %s/*" % kubernetes.KUBE_BINS)
-        ssh.mkdirs(kubernetes.KUBELET_DATA)
-        ssh.mkdirs(os.path.join(kubernetes.KUBELET_DATA,'config'))
-        ssh.runner('systemctl daemon-reload')
-        ssh.runner('systemctl start kubelet')
-        ssh.runner('systemctl enable kubelet')
-        ssh.runner('systemctl status kubelet')
-        self._Systemd_Check(node_ip, 'kubelet')
-        ssh.runner('echo "{ip} CalicoInterFace" >> /etc/hosts'.format(ip=node_ip))
+        with self.SSH(master) as mt:
+            CaCrt, _ = mt.runner("cat /etc/kubernetes/pki/ca.crt")
+            CaKey, _ = mt.runner("cat /etc/kubernetes/pki/ca.key")
+            SaKey, _ = mt.runner("cat /etc/kubernetes/pki/sa.key")
+            SaPub, _ = mt.runner("cat /etc/kubernetes/pki/sa.pub")
+            FrontCrt, _ = mt.runner("cat /etc/kubernetes/pki/front-proxy-ca.crt")
+            FrontKey, _ = mt.runner("cat /etc/kubernetes/pki/front-proxy-ca.key")
+            EtcdCrt, _ = mt.runner("cat /etc/kubernetes/pki/etcd/ca.crt")
+            EtcdKey, _ = mt.runner("cat /etc/kubernetes/pki/etcd/ca.key")
+            admin, _ = mt.runner("cat /etc/kubernetes/admin.conf")
 
-    @templates
-    def _kube_proxy(self, node_ip):
-        self.logger.info(u"{ip}安装kube_proxy！！".format(ip=node_ip))
-        js = {"CN": "system:kube-proxy", "hosts": [], "key": {"algo": "rsa", "size": 2048}, "names": [
-            {"C": "CN", "ST": "BeiJing", "L": "BeiJing", "O": "k8s", "OU": "System"}]}
-        with open('./kube-proxy-csr.json', mode='w') as fd:
-            json.dump(js, fd)
-        unit = '''[Unit]
-Description=Kubernetes Kube-Proxy Server
-Documentation=https://github.com/GoogleCloudPlatform/kubernetes
-After=network.target
-[Service]
-WorkingDirectory={KUBE_PROXY}
-ExecStart={KUBE_BINS}/kube-proxy \\
-  --config={KUBE_SSL}/kube-proxy.config.yaml \\
-  --logtostderr=true \\
-  --v=2
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=65536
-[Install]
-WantedBy=multi-user.target'''.format(KUBE_SSL=kubernetes.KUBE_SSL,
-                                     KUBE_BINS=kubernetes.KUBE_BINS,KUBE_PROXY=kubernetes.KUBE_PROXY,)
-        with open('./kube-proxy.service', mode='w') as fd:
-            fd.write(unit)
-        yaml = '''apiVersion: kubeproxy.config.k8s.io/v1alpha1
-bindAddress: {NODE_IP}
-clientConnection:
-  kubeconfig: {KUBE_SSL}/kube-proxy.kubeconfig
-clusterCIDR: {SERVICE_CIDR}
-healthzBindAddress: {NODE_IP}:10256
-hostnameOverride: matchvs-{ExternalIP}
-kind: KubeProxyConfiguration
-metricsBindAddress: {NODE_IP}:10249
-mode: "ipvs"      
-'''.format(KUBE_SSL=kubernetes.KUBE_SSL,ExternalIP=self.cfg['NODES']['IPS'][node_ip],
-           NODE_IP=node_ip, SERVICE_CIDR=kubernetes.SERVICE_CIDR)
-        with open('kube-proxy.config.yaml',mode='w') as f:
-            f.write(yaml)
-        cmd = 'cd {KUBE_SSL} && {KUBE_BINS}/cfssl gencert -ca={KUBE_SSL}/ca.pem -ca-key={KUBE_SSL}/ca-key.pem' \
-              ' -config={KUBE_SSL}/ca-config.json ' \
-              '-profile=kubernetes kube-proxy-csr.json | {KUBE_BINS}/cfssljson -bare kube-proxy '.format(
-            KUBE_SSL=kubernetes.KUBE_SSL, KUBE_BINS=kubernetes.KUBE_BINS)
+        for ip in IpList:
+            with self.SSH(ip) as ssh:
+                ssh.mkdirs("/etc/kubernetes/pki/etcd")
+                ssh.runner('''echo "%s" > /etc/kubernetes/pki/ca.crt''' % CaCrt)
+                ssh.runner('''echo "%s" > /etc/kubernetes/pki/ca.key''' % CaKey)
+                ssh.runner('''echo "%s" > /etc/kubernetes/pki/sa.key''' % SaKey)
+                ssh.runner('''echo "%s" > /etc/kubernetes/pki/sa.pub''' % SaPub)
+                ssh.runner('''echo "%s" > /etc/kubernetes/pki/front-proxy-ca.crt''' % FrontCrt)
+                ssh.runner('''echo "%s" > /etc/kubernetes/pki/front-proxy-ca.key''' % FrontKey)
+                ssh.runner('''echo "%s" > /etc/kubernetes/pki/etcd/ca.crt''' % EtcdCrt)
+                ssh.runner('''echo "%s" > /etc/kubernetes/pki/etcd/ca.key''' % EtcdKey)
+                ssh.runner('''echo "%s" > /etc/kubernetes/admin.conf''' % admin)
 
-        cmd1 = "cd {KUBE_SSL} && {KUBE_BINS}/kubectl config set-cluster kubernetes " \
-               "--certificate-authority={KUBE_SSL}/ca.pem " \
-               "--embed-certs=true --server={KUBE_APISERVER} --kubeconfig=kube-proxy.kubeconfig".format(
-            KUBE_SSL=kubernetes.KUBE_SSL, KUBE_BINS=kubernetes.KUBE_BINS,
-            KUBE_APISERVER=self.cfg['NODES']['APISERVER_URL'])
+    def __UntaintNode(self, ip, nodename):
+        with self.SSH(ip) as ssh:
+            self.logger.debug("taint %s" % nodename)
+            return ssh.runner("kubectl taint nodes {} node-role.kubernetes.io/master:NoSchedule-".format(nodename))
 
-        cmd2 = "cd {KUBE_SSL} &&{KUBE_BINS}/kubectl config set-credentials kube-proxy" \
-               " --client-certificate={KUBE_SSL}/kube-proxy.pem " \
-               "--client-key={KUBE_SSL}/kube-proxy-key.pem --embed-certs=true " \
-               "--kubeconfig=kube-proxy.kubeconfig".format(KUBE_SSL=kubernetes.KUBE_SSL,
-                                                           KUBE_BINS=kubernetes.KUBE_BINS)
+    def __JoinMaster(self, ip):
+        with self.SSH(ip) as ssh:
+            return ssh.do_script(
+                "kubeadm join {} --token {} --discovery-token-ca-cert-hash {} --experimental-control-plane".format(
+                    self.LoadBalancer, self.token, self.CertHash
+                )
+            )
 
-        cmd3 = "cd {KUBE_SSL} && {KUBE_BINS}/kubectl config set-context default " \
-               "--cluster=kubernetes --user=kube-proxy " \
-               "--kubeconfig=kube-proxy.kubeconfig".format(KUBE_SSL=kubernetes.KUBE_SSL,
-                                                           KUBE_BINS=kubernetes.KUBE_BINS)
-        cmd4 = "cd {KUBE_SSL} && {KUBE_BINS}/kubectl config use-context default --kubeconfig=kube-proxy.kubeconfig".format(
-            KUBE_SSL=kubernetes.KUBE_SSL, KUBE_BINS=kubernetes.KUBE_BINS)
-        ssh = self.SSH(node_ip)
-        self._SSL_sender(kubernetes.tmp, kubernetes.KUBE_SSL, node_ip)
-        ssh.mkdirs(kubernetes.KUBE_PROXY)
-        msg, state = ssh.runner(cmd)
-        self.logger.debug(msg)
-        ssh.runner(cmd1)
-        ssh.runner(cmd2)
-        ssh.runner(cmd3)
-        ssh.runner(cmd4)
-        ssh.runner('systemctl daemon-reload')
-        ssh.runner('systemctl start kube-proxy')
-        ssh.runner('systemctl enable kube-proxy')
-        ssh.runner('systemctl status kube-proxy')
-        self._Systemd_Check(node_ip, 'kube-proxy')
+    def __JoinNode(self, ip):
+        with self.SSH(ip) as ssh:
+            return ssh.do_script(
+                "kubeadm join {} --token {} --discovery-token-ca-cert-hash {}".format(
+                    self.LoadBalancer, self.token, self.CertHash
+                )
+            )
 
-    def access_nodes(self, kubectl):
-        cmd = "{KUBE_BINS}/kubectl get csr|grep Pending".format(KUBE_BINS=kubernetes.KUBE_BINS)
-        ssh = self.SSH(kubectl)
-        msg, state = ssh.runner(cmd)
-        self.logger.debug(msg)
-        pending = []
-        if state:
-            for lines in msg.split('\n'):
-                if lines:
-                    pending.append(lines.split()[0])
-        self.logger.debug(pending)
-        if pending:
-            for p in pending:
-                cmd2 = "{KUBE_BINS}/kubectl certificate approve {pending}".format(KUBE_BINS=kubernetes.KUBE_BINS,
-                                                                                  pending=p)
-                msg2 = ssh.runner(cmd2)
-                self.logger.debug(msg2)
+    def __HaProxy(self, ip):
+        self.logger.debug(u"%s: 现在安装haproxy" % ip)
+        with self.SSH(ip) as ssh:
+            ssh.do_script("yum install -y haproxy keepalived")
+        https = [' '.join(["server", "kubernetes-https-%s" % ids, "%s:6443" % i, "check\n"]) for ids, i in
+                 enumerate(self.Masters)]
+        self.logger.debug(https)
+        http = [' '.join(["server", "kubernetes-http-%s" % ids2, "{}:{}".format(i2, self.InsecurePort), "check\n"]) for
+                ids2, i2
+                in enumerate(self.Masters)]
+        self.logger.debug(http)
+        haproxy = u'''global
+    daemon
+    nbproc    4
+    user      haproxy
+    group     haproxy
+    maxconn   50000
+    pidfile   /var/run/haproxy.pid
+    log       127.0.0.1   local0
+    chroot    /var/lib/haproxy
 
-    def _dns(self, kubectl):
-        ssh = self.SSH(kubectl)
-        ssh.mkdirs('/tmp/dns')
-        self._SSL_sender("./k8s/dns", '/tmp/dns', kubectl)
-        ssh.runner('{KUBE_BINS}/kubectl create -f /tmp/dns'.format(KUBE_BINS=kubernetes.KUBE_BINS))
-        self.CheckRuning(name="coredns", ip=kubectl)
+defaults
+    log       global
+    log       127.0.0.1   local0
+    maxconn   50000
+    retries   3
+    balance   roundrobin
+    option    httplog
+    option    dontlognull
+    option    httpclose
+    option    abortonclose
+    timeout   http-request 10s
+    timeout   connect 10s
+    timeout   server 1m
+    timeout   client 1m
+    timeout   queue 1m
+    timeout   check 5s
+
+listen stats
+  bind %s:9000
+  mode http
+  stats enable
+  stats hide-version
+  stats uri /stats
+  stats refresh 30s
+  stats realm Haproxy\ Statistics
+  stats auth Matchvs:Matchvs-Password
+  
+frontend kubernetes-https
+    bind 0.0.0.0:%s  #使用0.0.0.0主要是在使用svip 时能够使得vip的端口能访问
+    mode tcp
+    option tcplog
+    tcp-request inspect-delay 5s
+    tcp-request content accept if { req.ssl_hello_type 1 }
+    default_backend kubernetes-https
+backend kubernetes-https
+    mode tcp
+    option tcplog
+    option tcp-check
+    balance roundrobin
+    default-server inter 10s downinter 5s rise 2 fall 2 slowstart 60s maxconn 250 maxqueue 256 weight 100
+    %s
+    
+frontend kubernetes-http
+    bind %s
+    mode tcp
+    option tcplog
+    default_backend kubernetes-http
+backend kubernetes-http
+    mode tcp
+    option tcplog
+    option tcp-check
+    balance roundrobin
+    default-server inter 10s downinter 5s rise 2 fall 2 slowstart 60s maxconn 250 maxqueue 256 weight 100
+    %s      
+''' % (ip, self.LoadBalancer.split(":")[-1], '    '.join(https), "%s:680" % ip, '    '.join(http))
+        with self.SSH(ip) as ssh:
+            ssh.runner('''echo "%s" > /etc/haproxy/haproxy.cfg''' % haproxy)
+            ssh.runner("systemctl start haproxy")
+            ssh.runner("systemctl enable haproxy")
+            ssh.runner("systemctl status haproxy")
+
+    def __KeepAlived(self, ip, flag, pid):
+        self.logger.debug(u"%s: 现在安装keepalived" % ip)
+        OtherList = copy(self.Masters)
+        OtherList.remove(ip)
+        other = '\n'.join(OtherList)
+        # self.logger.debug(OtherList)
+        keepalived = u'''! Configuration File for keepalived
+global_defs {
+   notification_email {
+   }
+   router_id kubernetes-api
+}
+
+vrrp_script kubernetes {
+    # 自身状态检测
+    script "killall -0 haproxy"  #检查haproxy进程是否存在
+    interval 3
+    weight 5
+}
+
+vrrp_instance haproxy-vip {
+    # 使用单播通信，默认是组播通信
+    unicast_src_ip %s
+    unicast_peer {
+        %s
+    }
+    # 初始化状态
+    state %s   #slave节点就修改为BACKUP
+    # 虚拟ip 绑定的网卡
+    interface %s
+    # 此ID 要与Backup 配置一致
+    virtual_router_id 51
+    # 默认启动优先级，要比Backup 大点，但要控制量，保证自身状态检测生效
+    priority %s    #slave 修改比这个数值要小一点
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    virtual_ipaddress {
+        # 虚拟ip 地址
+        %s
+    }
+    track_script {
+        kubernetes
+    }
+}
+''' % (ip, other, flag, self.InterfaceName, pid, self.Vip)
+        with self.SSH(ip) as ssh:
+            ssh.runner('''echo "%s" > /etc/keepalived/keepalived.conf''' % keepalived)
+            ssh.runner('''echo "net.ipv4.ip_nonlocal_bind = 1" > /etc/sysctl.d/keepalive.conf''')
+            ssh.runner("sysctl --system")
+            ssh.runner("systemctl start keepalived")
+            ssh.runner("systemctl enable keepalived")
+            ssh.runner("systemctl status keepalived")
+
+    def __MakeHA(self):
+        if self.KeepAlived:
+            self.logger.info(u"开始给Master服务器安装keepalived 与haproxy")
+            self.logger.debug(self.Masters)
+            for index, ip in enumerate(self.Masters):
+                self.logger.debug(ip)
+                flag = "MASTER" if index == 0 else 'BACKUP'
+                pid = 100 if index == 0 else 98
+                self.__HaProxy(ip)
+                self.__KeepAlived(ip, flag, pid)
+        return
+
+    def MakeInitPath(self):
+        self.logger.warning(u"初始化服务器，结束后会把相应的服务器重启！！")
+        pool = ThreadPoolExecutor()
+        # 配置hostname
+        AllHostname = [pool.submit(self.__SetHostName, ip) for ip in self.ALL_IP]
+        wait(AllHostname, timeout=60, return_when=ALL_COMPLETED)
+        # 初始化环境
+        AllEnv = [pool.submit(self.Env, ip) for ip in self.ALL_IP]
+        wait(AllEnv, timeout=3600, return_when=ALL_COMPLETED)
+        # 重启机器
+        GetDoneIP = sorted([lt.result().split()[0] for lt in AllEnv], reverse=True)
+        self.logger.debug(GetDoneIP)
+        for ip in GetDoneIP:
+            self.__RestartServer(ip)
+            time.sleep(1)
+
+    def MakeAll(self):
+        pool = ThreadPoolExecutor()
+        # 测试可连接性！！
+        self.logger.info(u"测试集群机器是否能连接上！！")
+        TestPort = [pool.submit(self.TestSshPort, ip, self.SshPort) for ip in self.ALL_IP]
+        wait(TestPort, timeout=300, return_when=ALL_COMPLETED)
+        self.logger.debug(TestPort)
+        # 安装kubeadm
+        shell = os.path.join(self.ScriptPath, "k8s/init/kubeadm.sh")
+        Version = '''sed -i '1,5s#Version.*$#Version="{}"#' {}'''.format(self.Version, shell)
+        DockerData = '''sed -i '1,5s#DockerData.*$#DockerData="{}"#' {}'''.format(self.DockerData, shell)
+        DockerVersion = '''sed -i '1,5s#DockerVersion.*$#DockerVersion="{}"#' {}'''.format(self.DockerVersion, shell)
+        for cmd in (Version, DockerData, DockerVersion):
+            self.subPopen(cmd)
+        AllKubeadm = [pool.submit(self.__kubeadm, ip, shell) for ip in self.ALL_IP]
+        wait(AllKubeadm, timeout=3600, return_when=ALL_COMPLETED)
+        self.logger.debug(AllKubeadm)
+
+    def __MakeMultiMaster(self):
+        first, others = self.Masters[0], self.Masters[1:]
+        self.token, self.CertHash = self.__InitCluster(first)
+        self.__CopyCrts(first, others)
+        with ThreadPoolExecutor() as pool:
+            for ip in others:
+                pool.submit(self.__JoinMaster, ip)
+
+    def MakeMaster(self):
+        self.logger.info("初始化Masters")
+        if len(self.Masters) > 1:
+            self.__MakeHA()
+            self.__MakeMultiMaster()
+        else:
+            ip = self.Masters[0]
+            self.token, self.CertHash = self.__InitCluster(ip)
+
+        # 复制kubconfig到root目录
+        self.__Kubeconfig()
+        # 回写整个配置文件
+        self.cfg['Kubeconf']["Token"] = self.token
+        self.cfg['Kubeconf']["CertHash"] = self.CertHash
+        with open(os.path.join(self.ScriptPath, "config.toml"), mode="w") as fd:
+            toml.dump(self.cfg, fd)
+
+    def SchedulerToMaster(self):
+        self.logger.info(u"去掉master不调度规则，减少机器使用")
+        # 去掉master不调度规则
+        for ip in self.Masters:
+            self.__UntaintNode(ip, self.Perfix + self.Nodes[ip])
+
+    def __ExtendNodeIP(self):
+        with self.SSH(self.Masters[0]) as k8s:
+            k8snodes, _ = k8s.runner("kubectl get nodes|awk '/k8s/{print $1}'")
+        Haveing = set([name.strip(self.Perfix) for name in k8snodes.split("\r\n") if name])
+        ConfigNodes = set(self.Nodes.values())
+        self.logger.debug((Haveing, ConfigNodes))
+        names = ConfigNodes.symmetric_difference(Haveing)
+        return [k for k, v in self.Nodes.items() for name in names if name == v and k not in self.Masters]
+
+    def __NotKubeletNodes(self, iplist):
+        NotKubelet = []
+        for ip in iplist:
+            try:
+                self.checker(ip)
+                NotKubelet.append(ip)
+            except Exception as e:
+                self.logger.debug("%s: %s", ip, e)
+                break
+        return NotKubelet
+
+    def ExtendEnv(self):
+        self.logger.warning("扩展node,配置Node环境！！，完成后会重启node")
+        # 配置hostname
+        pool = ThreadPoolExecutor()
+        AllHostname = [pool.submit(self.__SetHostName, ip) for ip in self.ALL_IP]
+        wait(AllHostname, timeout=60, return_when=ALL_COMPLETED)
+        ips = self.__ExtendNodeIP()
+        lst = self.__NotKubeletNodes(ips)
+        AllEnv = [pool.submit(self.Env, ip) for ip in lst]
+        wait(AllEnv, timeout=3600, return_when=ALL_COMPLETED)
+        for ip in lst:
+            self.__RestartServer(ip)
+
+    def AddNode(self):
+        DoIpList = self.__ExtendNodeIP()
+        self.logger.debug(DoIpList)
+        NotKubelet = self.__NotKubeletNodes(DoIpList)
+        if NotKubelet:
+            pool = ThreadPoolExecutor()
+            self.logger.info(u"节点没有安装docker等程序，脚本开始安装docker.")
+            # 测试可连接性！！
+            self.logger.info(u"测试集群机器是否能连接上！！")
+            TestPort = [pool.submit(self.TestSshPort, ip, self.SshPort) for ip in DoIpList]
+            wait(TestPort, timeout=300, return_when=ALL_COMPLETED)
+            self.logger.debug(TestPort)
+            shell = os.path.join(self.ScriptPath, "k8s/init/kubeadm.sh")
+            nodes = [pool.submit(self.__kubeadm, ip, shell) for ip in DoIpList]
+            for oj in nodes:
+                self.logger.debug(oj.result())
+        self.logger.info(u"添加node节点进k8s里！！")
+        with ThreadPoolExecutor() as pool:
+            ret = [pool.submit(self.__JoinNode, ip) for ip in DoIpList]
+        wait(ret, timeout=300, return_when=ALL_COMPLETED)
+        for ojs in ret:
+            self.logger.debug(ojs.result())
+        self.logger.info("添加节点成功！！等待k8s初始化好节点。")
 
     def _calico(self, kubectl):
         os.chdir(self.ScriptPath)
-        cmd = '''sed -i -r '/CALICO_IPV4POOL_CIDR/{n;s#value: ".*"$#value: "%s"#}' %s''' % (
-            kubernetes.CLUSTER_CIDR, './k8s/calico/calico.yaml')
-        self.subPopen(cmd)
+        PODip = '''sed -i -r '/CALICO_IPV4POOL_CIDR/{n;s#value: ".*"$#value: "%s"#}' ./k8s/calico/calico.yaml''' % self.PodCidr
+        MTU = '''sed -i 's/1440/{}/g' ./k8s/calico/calico.yaml'''.format(self.MTU)
+        for cmd in (PODip, MTU):
+            self.subPopen(cmd)
         ssh = self.SSH(kubectl)
         ssh.mkdirs('/tmp/calico')
         self._SSL_sender("./k8s/calico", '/tmp/calico', kubectl)
-        ssh.runner('{KUBE_BINS}/kubectl create -f /tmp/calico'.format(KUBE_BINS=kubernetes.KUBE_BINS))
+        ssh.runner('kubectl create -f /tmp/calico')
         self.logger.info("calico install successfully!")
 
     def _dashboard(self, kubectl):
@@ -535,151 +425,63 @@ mode: "ipvs"
         ssh = self.SSH(kubectl)
         ssh.mkdirs(tmp)
         self._SSL_sender("./k8s/dashboard", '/tmp/dashboard', kubectl)
-        ssh.runner('{KUBE_BINS}/kubectl create -f /tmp/dashboard'.format(KUBE_BINS=kubernetes.KUBE_BINS))
+        ssh.runner('kubectl create -f /tmp/dashboard')
         self.CheckRuning(name="dashboard", ip=kubectl)
 
     def _heapster(self, kubectl):
         ssh = self.SSH(kubectl)
         ssh.mkdirs('/tmp/heapster')
         self._SSL_sender("./k8s/heapster", '/tmp/heapster', kubectl)
-        ssh.runner('{KUBE_BINS}/kubectl create -f /tmp/heapster'.format(KUBE_BINS=kubernetes.KUBE_BINS))
+        ssh.runner('kubectl create -f /tmp/heapster')
         self.CheckRuning(name="monitoring-influxdb", ip=kubectl)
         self.CheckRuning(name="heapster", ip=kubectl)
         self.CheckRuning(name="monitoring-grafana", ip=kubectl)
 
-    def etcd(self):
-        etcd_ips = {}
-        self.logger.debug(etcd_ips)
-        for index, ip in enumerate(list(set(self.cfg['ETCD']['IPS']))):
-            index += 1
-            name = "etcd0" + str(index)
-            etcd_ips[name] = ip
-            self.etcd_node.append(name + '=' + "https://" + ip + ':2380')
-            self.etcd_endpoint.append("https://" + ip + ":2379")
+    def _rook(self, kubectl):
+        self.logger.info("开始安装rook程序")
+        ssh = self.SSH(kubectl)
+        ssh.mkdirs('/tmp/ceph')
+        self._SSL_sender("./k8s/ceph", '/tmp/ceph', kubectl)
+        ssh.do_script("cd /tmp/ceph && /bin/bash /tmp/ceph/install.sh")
+        self.logger.info("rook install successfully!")
 
-        for name, ip in etcd_ips.items():
-            self._etcd(name, ip)
-        else:
-            for ip in etcd_ips.values():
-                self._Systemd_Check(ip, 'etcd.service')
+    def _helm(self, kubectl):
+        self.logger.info("开始安装helm程序")
+        ssh = self.SSH(kubectl)
+        ssh.push("./k8s/helm/helm", "/usr/bin/helm", kubectl)
+        ssh.runner("chmod a+x /usr/bin/helm")
+        ssh.do_script("helm init --upgrade -i registry.cn-hangzhou.aliyuncs.com/google_containers/tiller:%s "
+                      "--stable-repo-url https://kubernetes.oss-cn-hangzhou.aliyuncs.com/charts" % self.HelmVersion)
+        ssh.runner("kubectl create serviceaccount --namespace kube-system tiller")
+        ssh.runner(
+            "kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller")
+        ssh.runner(
+            '''kubectl patch deploy tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}' -n kube-system''')
+        self.logger.info("helm install successfully!")
 
-    def master(self):
-        for ip in self.cfg['ETCD']['IPS']:
-            self._apiserver(ip)
-            self._controller_manager(ip)
-            self._scheduler(ip)
-        else:
-            ssh = self.SSH(self.cfg['ETCD']['IPS'][0])
-            self.logger.info(u"开始生成kubelet-bootstrap rolebing！！")
-            bootstrap = "{KUBE_BINS}/kubectl create clusterrolebinding kubelet-bootstrap " \
-                        "--clusterrole=system:node-bootstrapper --user=kubelet-bootstrap".format(
-                KUBE_BINS=kubernetes.KUBE_BINS)
-            self.logger.debug(bootstrap)
-            self.logger.debug(ssh.runner(bootstrap))
-            self.logger.info(u"开始生成kubelet-nodes rolebing！！")
-            n = "{KUBE_BINS}/kubectl create clusterrolebinding kubelet-nodes --clusterrole=system:node " \
-                "--group=system:nodes".format(KUBE_BINS=kubernetes.KUBE_BINS)
-            self.logger.debug(n)
-            self.logger.debug(ssh.runner(n))
-
-            msg, stat = ssh.runner("%s/kubectl get clusterrolebinding|awk '/kubelet/{print $1}'" % kubernetes.KUBE_BINS)
-            if "kubelet-bootstrap" not in msg or "kubelet-nodes" not in msg:
-                self.logger.error(u"生成rolebing失败！！")
-                sys.exit(-1)
-            else:
-                self.logger.info(u"生成rollbing成功！！")
-            return self.logger.info("master install successfully!")
-
-    def node(self):
-        hosts = []
-        for key, value in self.cfg['NODES']['IPS'].items():
-            hosts.append("{key} matchvs-{value}".format(key=key, value=value))
-        self.logger.debug(hosts)
-        ins = '\n'.join(hosts)
-        self.logger.debug(ins)
-        node_ips = set(self.cfg['NODES']['IPS'].keys())
-        for ips in node_ips:
-            IptableDrop = "/sbin/iptables -A INPUT -p tcp -m multiport --dports 10250,10251 -j DROP "
-            new = self.SSH(ips)
-            new.runner('echo "{ins}" >> /etc/hosts'.format(ins=ins))
-            new.runner(IptableDrop)
-            for dolist in node_ips:
-                IptableAccept = "/sbin/iptables -I INPUT -s %s -p tcp -m multiport --dports 10250,10251 -j ACCEPT " % dolist
-                new.runner(IptableAccept)
-            LoAccept = "/sbin/iptables -I INPUT -i lo -j ACCEPT"
-            new.runner(LoAccept)
-            new.runner("service iptables save")
-        else:
-            for ip in node_ips:
-                self._kubelet(ip)
-                self._kube_proxy(ip)
-            return self.logger.info("node install successfully!")
-
-    def Deployment(self):
-        ip = self.cfg['NODES']['IPS'].keys()[0]
-        self.access_nodes(ip)
+    def Addons(self):
+        ip = self.Masters[0]
         self._calico(ip)
-        self.CheckingNode(ip)
-        self._dns(ip)
         self._dashboard(ip)
         self._heapster(ip)
-
-    def DropEtcdService(self, ip):
-        self.logger.info(u"{address}: 移除ETCD服务，并删除文件！".format(address=ip))
-        ssh = self.SSH(ip)
-        ssh.runner("systemctl stop etcd")
-        ssh.runner("rm -rf /etc/systemd/system/etcd.service")
-        ssh.runner("rm -rf {KUBE_SSL}".format(KUBE_SSL=self.KUBE_SSL))
-        ssh.runner("rm -rf {ETCD_DATA}".format(ETCD_DATA=self.ETCD_DATA))
-        ssh.runner("rm -rf {KUBE_BINS}".format(KUBE_BINS=self.KUBE_BINS))
+        self._rook(ip)
+        self._helm(ip)
 
     def DropDockerService(self, ip):
         self.logger.info(u"{address}: 卸载Docker服务，并删除文件！".format(address=ip))
         ssh = self.SSH(ip)
-        ssh.runner("umount -f $(mount |awk '/kubelet/{print $3}')")
+        ssh.runner("umount -l $(mount |awk '/kubelet/{print $3}')")
+        ssh.runner("umount -l $(mount |awk '/kubelet/{print $3}')")
         ssh.runner('systemctl stop docker')
-
 
     def DropNodeService(self, ip):
         self.logger.info(u"{address}: 清理Node！！".format(address=ip))
         ssh = self.SSH(ip)
-        ssh.runner("systemctl stop kube-apiserver")
-        ssh.runner("systemctl stop kube-controller-manager")
-        ssh.runner("systemctl stop kube-scheduler")
         ssh.runner("systemctl stop kubelet")
-        ssh.runner("systemctl stop kube-proxy")
         ssh.runner("rm -rf /etc/systemd/system/kube*")
-        ssh.runner("sed -i 's#.*{bins}$##g' /root/.bashrc".format(bins=kubernetes.KUBE_BINS))
-        ssh.runner("rm -rf /root/.kube")
-        ssh.runner("rm -rf {KUBE_SSL}".format(KUBE_SSL=self.KUBE_SSL))
-        ssh.runner("rm -rf {KUBE_BINS}".format(KUBE_BINS=self.KUBE_BINS))
-        ssh.runner("rm -rf {KUBELET_DATA}".format(KUBELET_DATA=self.KUBELET_DATA))
-        ssh.runner("rm -rf {KUBE_PROXY}".format(KUBE_PROXY=self.KUBE_PROXY))
-        ssh.runner("rm -rf /tmp/build.sh")
-        ssh.runner("rm -rf /tmp/calico")
-        ssh.runner("rm -rf /tmp/dashboard")
-        ssh.runner("rm -rf /tmp/common")
-        ssh.runner("rm -rf /tmp/heapster")
-        ssh.runner("rm -rf /tmp/dns")
-        ssh.runner("rm -rf /tmp/elk")
-        ssh.runner("rm -rf /tmp/engine")
-        ssh.runner("rm -rf /tmp/mysql")
-        ssh.runner("rm -rf /tmp/nginx")
-        ssh.runner("rm -rf /tmp/redis_cluster")
-        ssh.runner("rm -rf /tmp/zk")
 
-    def DropNfsService(self):
-        self.logger.info(u"{address}: 移除NFS服务，并删除文件！".format(address=self.cfg['NFS']['IPS']))
-        ssh = self.SSH(self.cfg['NFS']['IPS'])
-        ssh.runner("systemctl stop nfs")
-        ssh.runner("systemctl stop rpcbind")
-        ssh.runner("yum remove rpcbind nfs-utils -y")
-        ssh.runner("rm -rf /nfs")
-
-    def remove(self):
-        self.logger.info(u"开始删除kubernetes")
-        self.DropNfsService()
-        for ip in self.ALL_IP:
-            self.DropEtcdService(ip)
-            self.DropDockerService(ip)
-            self.DropNodeService(ip)
+    def DropRookService(self):
+        self.logger.info(u"移除rook服务!!")
+        ssh = self.SSH(self.Masters[0])
+        ssh.runner("kubectl delete namespace rook-ceph")
+        ssh.runner("kubectl delete namespace rook-ceph-system")
