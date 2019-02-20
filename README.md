@@ -1,15 +1,15 @@
 # k8s部署脚本
 
 ## 环境要求
-python: 2.7
-os: centos 7
+python: 2.7  
+os: centos 7  
 
 ##  组件说明：
-calico  3.4
-rook-ceph 0.9.2
-dashboard v1.8.3
-heapster v1.5.4
-helm v2.12.1
+calico  3.4  
+rook-ceph 0.9.2  
+dashboard v1.8.3  
+heapster v1.5.4  
+helm v2.12.1  
 
 ## 安装python依赖
 pip install -r requirements.txt
