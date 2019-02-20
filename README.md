@@ -4,6 +4,13 @@
 python: 2.7
 os: centos 7
 
+# 组件说明：
+calico  3.4
+rook-ceph 0.9.2
+dashboard
+heapster
+helm v2.12.1
+
 ## 安装python依赖
 pip install -r requirements.txt
 
