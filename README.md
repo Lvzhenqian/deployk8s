@@ -1,5 +1,8 @@
-k8s部署脚本
-[TOC]
+# k8s部署脚本
+
+## 环境要求
+python: 2.7
+os: centos 7
 
 ## 安装python依赖
 pip install -r requirements.txt
