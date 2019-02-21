@@ -419,7 +419,20 @@ vrrp_instance haproxy-vip {
         ssh.runner('kubectl create -f /tmp/calico')
         self.logger.info("calico install successfully!")
 
+    def _flannel(self,kubectl):
+        self.logger.info(u"开始安装flannel到k8s里")
+        os.chdir(self.ScriptPath)
+        PODip = '''sed -i 's#PODADDRESS#%s#' ./k8s/flannel/kube-flannel.yml''' % self.PodCidr
+        for cmd in (PODip):
+            self.subPopen(cmd)
+        ssh = self.SSH(kubectl)
+        ssh.mkdirs('/tmp/flannel')
+        self._SSL_sender("./k8s/flannel", '/tmp/flannel', kubectl)
+        ssh.runner('kubectl create -f /tmp/flannel')
+        self.logger.info("flannel install successfully!")
+
     def _dashboard(self, kubectl):
+        self.logger.info(u"开始安装kube-dashboard")
         os.chdir(self.ScriptPath)
         tmp = '/tmp/dashboard'
         ssh = self.SSH(kubectl)
@@ -437,6 +450,22 @@ vrrp_instance haproxy-vip {
         self.CheckRuning(name="heapster", ip=kubectl)
         self.CheckRuning(name="monitoring-grafana", ip=kubectl)
 
+    def _MetricServer(self,ip):
+        self.logger.info(u"开始安装metric-server到k8s里")
+        with self.SSH(ip) as ssh:
+            ssh.mkdirs('/tmp/metric-server')
+            self._SSL_sender("./k8s/metric-server", '/tmp/metric-server', ip)
+            ssh.runner('kubectl create -f /tmp/metric-server')
+
+    def _Prometheus(self,ip):
+        self.logger.info(u"开始安装prometheus到k8s里")
+        with self.SSH(ip) as ssh:
+            ssh.mkdirs('/tmp/prometheus')
+            self._SSL_sender("./k8s/prometheus", '/tmp/prometheus', ip)
+            ssh.runner('kubectl create -f /tmp/prometheus')
+            time.sleep(2)
+            ssh.runner('kubectl create -f /tmp/prometheus')
+
     def _rook(self, kubectl):
         self.logger.info("开始安装rook程序")
         ssh = self.SSH(kubectl)
@@ -444,6 +473,16 @@ vrrp_instance haproxy-vip {
         self._SSL_sender("./k8s/ceph", '/tmp/ceph', kubectl)
         ssh.do_script("cd /tmp/ceph && /bin/bash /tmp/ceph/install.sh")
         self.logger.info("rook install successfully!")
+
+    def _kubeless(self,ip):
+        self.logger.info("开始安装kubeless程序")
+        with self.SSH(ip) as ssh:
+            ssh.mkdirs('/tmp/kubeless')
+            self._SSL_sender("./k8s/kubeless", '/tmp/kubeless', ip)
+            ssh.runner("kubectl create ns kubeless")
+            ssh.runner("chmod a+x /tmp/kubeless/kubeless")
+            ssh.runner("mv /tmp/kubeless/kubeless /bin/kubeless")
+            ssh.runner('kubectl create -f /tmp/kubeless')
 
     def _helm(self, kubectl):
         self.logger.info("开始安装helm程序")
@@ -459,12 +498,28 @@ vrrp_instance haproxy-vip {
             '''kubectl patch deploy tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}' -n kube-system''')
         self.logger.info("helm install successfully!")
 
+    def NetworkAddons(self,ip):
+        switch = {
+            "calico": self._calico,
+            "flannel": self._flannel
+        }
+        return switch[self.Network](ip)
+
+    def MetricAddons(self,ip):
+        switch = {
+            "heapster": self._heapster,
+            "prometheus": self._Prometheus
+        }
+        return switch[self.Metric](ip)
+
     def Addons(self):
         ip = self.Masters[0]
-        self._calico(ip)
+        self.NetworkAddons(ip)
         self._dashboard(ip)
-        self._heapster(ip)
+        self._MetricServer(ip)
+        self.MetricAddons(ip)
         self._rook(ip)
+        self._kubeless(ip)
         self._helm(ip)
 
     def DropDockerService(self, ip):

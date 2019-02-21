@@ -22,8 +22,12 @@ ProxyMode = "ipvs"
 HelmVersion = "v2.12.1"
 # NodeName 前缀，不能留空，增加节点时会使用到
 Perfix = "k8s-"
+# 网络插件选择[calico|flannel]
+NetworkAddons = "calico"
 # Calico MTU值 （阿里云1440|京东云1430）
 MTU = "1430"
+# 监控插件[heapster|prometheus]
+MetricAddons = "prometheus"
 # 增加节点时要使用token 与证书hash值，部署时不必填写，部署完成后会回写配置文件。
 Token = ""
 CertHash = ""

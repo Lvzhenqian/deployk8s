@@ -1,15 +1,24 @@
 # k8s部署脚本
-
+    支持单master 多master 以及 keepalived+haproxy 多master等。
 ## 环境要求
 python: 2.7  
 os: centos 7  
 
 ##  组件说明：
-calico  3.4  
-rook-ceph 0.9.2  
-dashboard v1.8.3  
-heapster v1.5.4  
-helm v2.12.1  
+#### dns
+coredns
+#### 网络插件：
+calico 、 flannel
+#### 监控：
+heapster、prometheus、metric-server
+#### serverless
+kubeless
+#### 显示页面
+kubernetes-dashboard
+#### 存储
+rook-ceph  
+#### 包安装管理
+helm 
 
 ## 安装python依赖
 pip install -r requirements.txt
