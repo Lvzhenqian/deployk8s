@@ -74,6 +74,7 @@ class kubernetes(BaseObject):
         ssh = self.SSH(ip)
         ssh.push(config, '/root/k8s.yaml', ip)
         ssh.do_script("kubeadm init --config /root/k8s.yaml")
+        ssh.mkdirs("/root/.kube")
         ssh.runner("/bin/cp -rf /etc/kubernetes/admin.conf /root/.kube/config")
         ret, _ = ssh.runner("kubeadm token create --ttl 0 --print-join-command")
         # self.logger.debug(ret)
@@ -288,9 +289,6 @@ vrrp_instance haproxy-vip {
     def MakeInitPath(self):
         self.logger.warning(u"初始化服务器，结束后会把相应的服务器重启！！")
         pool = ThreadPoolExecutor()
-        # 配置hostname
-        AllHostname = [pool.submit(self.__SetHostName, ip) for ip in self.ALL_IP]
-        wait(AllHostname, timeout=60, return_when=ALL_COMPLETED)
         # 初始化环境
         AllEnv = [pool.submit(self.Env, ip) for ip in self.ALL_IP]
         wait(AllEnv, timeout=3600, return_when=ALL_COMPLETED)
@@ -308,12 +306,16 @@ vrrp_instance haproxy-vip {
         TestPort = [pool.submit(self.TestSshPort, ip, self.SshPort) for ip in self.ALL_IP]
         wait(TestPort, timeout=300, return_when=ALL_COMPLETED)
         self.logger.debug(TestPort)
+        # 配置hostname
+        AllHostname = [pool.submit(self.__SetHostName, ip) for ip in self.ALL_IP]
+        wait(AllHostname, timeout=60, return_when=ALL_COMPLETED)
         # 安装kubeadm
         shell = os.path.join(self.ScriptPath, "k8s/init/kubeadm.sh")
         Version = '''sed -i '1,5s#Version.*$#Version="{}"#' {}'''.format(self.Version, shell)
         DockerData = '''sed -i '1,5s#DockerData.*$#DockerData="{}"#' {}'''.format(self.DockerData, shell)
         DockerVersion = '''sed -i '1,5s#DockerVersion.*$#DockerVersion="{}"#' {}'''.format(self.DockerVersion, shell)
-        for cmd in (Version, DockerData, DockerVersion):
+        KubeletData = '''sed -i '1,5s#KubeletData.*$#KubeletData="{}"#' {}'''.format(self.KubeletData, shell)
+        for cmd in (Version, DockerData, DockerVersion, KubeletData):
             self.subPopen(cmd)
         AllKubeadm = [pool.submit(self.__kubeadm, ip, shell) for ip in self.ALL_IP]
         wait(AllKubeadm, timeout=3600, return_when=ALL_COMPLETED)
@@ -372,12 +374,10 @@ vrrp_instance haproxy-vip {
 
     def ExtendEnv(self):
         self.logger.warning("扩展node,配置Node环境！！，完成后会重启node")
-        # 配置hostname
         pool = ThreadPoolExecutor()
-        AllHostname = [pool.submit(self.__SetHostName, ip) for ip in self.ALL_IP]
-        wait(AllHostname, timeout=60, return_when=ALL_COMPLETED)
         ips = self.__ExtendNodeIP()
         lst = self.__NotKubeletNodes(ips)
+        # 安装服务器环境准备
         AllEnv = [pool.submit(self.Env, ip) for ip in lst]
         wait(AllEnv, timeout=3600, return_when=ALL_COMPLETED)
         for ip in lst:
@@ -395,6 +395,9 @@ vrrp_instance haproxy-vip {
             TestPort = [pool.submit(self.TestSshPort, ip, self.SshPort) for ip in DoIpList]
             wait(TestPort, timeout=300, return_when=ALL_COMPLETED)
             self.logger.debug(TestPort)
+            # 配置hostname
+            AllHostname = [pool.submit(self.__SetHostName, ip) for ip in self.ALL_IP]
+            wait(AllHostname, timeout=60, return_when=ALL_COMPLETED)
             shell = os.path.join(self.ScriptPath, "k8s/init/kubeadm.sh")
             nodes = [pool.submit(self.__kubeadm, ip, shell) for ip in DoIpList]
             for oj in nodes:
@@ -419,7 +422,7 @@ vrrp_instance haproxy-vip {
         ssh.runner('kubectl create -f /tmp/calico')
         self.logger.info("calico install successfully!")
 
-    def _flannel(self,kubectl):
+    def _flannel(self, kubectl):
         self.logger.info(u"开始安装flannel到k8s里")
         os.chdir(self.ScriptPath)
         PODip = '''sed -i 's#PODADDRESS#%s#' ./k8s/flannel/kube-flannel.yml''' % self.PodCidr
@@ -450,14 +453,14 @@ vrrp_instance haproxy-vip {
         self.CheckRuning(name="heapster", ip=kubectl)
         self.CheckRuning(name="monitoring-grafana", ip=kubectl)
 
-    def _MetricServer(self,ip):
+    def _MetricServer(self, ip):
         self.logger.info(u"开始安装metric-server到k8s里")
         with self.SSH(ip) as ssh:
             ssh.mkdirs('/tmp/metric-server')
             self._SSL_sender("./k8s/metric-server", '/tmp/metric-server', ip)
             ssh.runner('kubectl create -f /tmp/metric-server')
 
-    def _Prometheus(self,ip):
+    def _Prometheus(self, ip):
         self.logger.info(u"开始安装prometheus到k8s里")
         with self.SSH(ip) as ssh:
             ssh.mkdirs('/tmp/prometheus')
@@ -474,7 +477,7 @@ vrrp_instance haproxy-vip {
         ssh.do_script("cd /tmp/ceph && /bin/bash /tmp/ceph/install.sh")
         self.logger.info("rook install successfully!")
 
-    def _kubeless(self,ip):
+    def _kubeless(self, ip):
         self.logger.info("开始安装kubeless程序")
         with self.SSH(ip) as ssh:
             ssh.mkdirs('/tmp/kubeless')
@@ -498,14 +501,14 @@ vrrp_instance haproxy-vip {
             '''kubectl patch deploy tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}' -n kube-system''')
         self.logger.info("helm install successfully!")
 
-    def NetworkAddons(self,ip):
+    def NetworkAddons(self, ip):
         switch = {
             "calico": self._calico,
             "flannel": self._flannel
         }
         return switch[self.Network](ip)
 
-    def MetricAddons(self,ip):
+    def MetricAddons(self, ip):
         switch = {
             "heapster": self._heapster,
             "prometheus": self._Prometheus

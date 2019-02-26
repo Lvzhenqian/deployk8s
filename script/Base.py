@@ -80,7 +80,7 @@ class BaseObject(Config):
             ssh.push(src, dst, ip)
 
     def CheckRuning(self, name, ip):
-        self.logger.info("%s 正在启动中！",name)
+        self.logger.info(u"%s 正在启动中！",name)
         ssh = self.SSH(ip)
         while True:
             msg, stat = ssh.runner('kubectl get pods --all-namespaces|grep "{}"'.format(name))

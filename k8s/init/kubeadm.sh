@@ -2,6 +2,7 @@
 Version="1.13.2"
 DockerVersion="3:docker-ce-18.09.2-3.el7.x86_64"
 DockerData="/data/docker"
+KubeletData="/data/kubelet"
 echo "准备安装docker"
 if ping -c 1 www.google.com &> /dev/null;then
     yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
@@ -45,6 +46,8 @@ EOF
 yum makecache
 package=$(yum search --showduplicates kubeadm kubelet kubectl|awk '/'${Version}'/{print $1}')
 yum install -y ${package}
+mkdir -p ${KubeletData}
+sed -i -r 's#KUBELET_EXTRA_ARGS=.*$#KUBELET_EXTRA_ARGS="--root-dir='${KubeletData}'"#g' /etc/sysconfig/kubelet
 systemctl daemon-reload
 systemctl restart kubelet
 systemctl enable kubelet

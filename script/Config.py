@@ -21,6 +21,7 @@ class Config(object):
         self.DockerVersion = self.cfg['Kubeconf'].get('DockerVersion')
         self.DockerData = self.cfg['Kubeconf'].get('DockerData')
         self.EtcdData = self.cfg['Kubeconf'].get('EtcdData')
+        self.KubeletData = self.cfg['Kubeconf'].get('KubeletData')
         self.ProxyMode = self.cfg['Kubeconf'].get('ProxyMode')
         self.HelmVersion = self.cfg['Kubeconf'].get('HelmVersion')
         self.Perfix = self.cfg['Kubeconf'].get('Perfix')

@@ -1,7 +1,7 @@
 [Kubeconf]
 Version = "1.13.2"
 # 客户端访问apiserver的url地址,如果使用haproxy请配置端口非6443默认值。
-LoadBalancer= "192.168.8.231:5443"
+LoadBalancer= "192.168.8.231:6443"
 # services地址范围
 ServiceCidr = "10.254.0.0/16"
 # PodIP地址范围
@@ -16,6 +16,8 @@ DockerVersion = "3:docker-ce-18.09.2-3.el7.x86_64"
 DockerData = '/data/docker'
 # etcd数据目录
 EtcdData = "/data/etcd"
+# Kubelet数据目录
+KubeletData = "/data/kubelet"
 # kube-proxy 模式 ipvs|iptables
 ProxyMode = "ipvs"
 # helm 版本号
