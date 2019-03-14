@@ -487,6 +487,16 @@ vrrp_instance haproxy-vip {
             ssh.runner("mv /tmp/kubeless/kubeless /bin/kubeless")
             ssh.runner('kubectl create -f /tmp/kubeless')
 
+    def _falco(self,ip):
+        self.logger.info("开始安装falco程序")
+        with self.SSH(ip) as ssh:
+            ssh.mkdirs('/tmp/falco')
+            self._SSL_sender("./k8s/falco", '/tmp/falco', ip)
+            ssh.runner('kubectl create -f /tmp/falco/falco-account.yaml')
+            ssh.runner('kubectl create -f /tmp/falco/falco-service.yaml')
+            ssh.runner('kubectl create configmap falco-config --from-file=/tmp/falco/conf')
+            ssh.runner('kubectl create -f /tmp/falco/falco-daemonset-configmap.yaml')
+
     def _helm(self, kubectl):
         self.logger.info("开始安装helm程序")
         ssh = self.SSH(kubectl)
@@ -523,6 +533,7 @@ vrrp_instance haproxy-vip {
         self.MetricAddons(ip)
         self._rook(ip)
         self._kubeless(ip)
+        self._falco(ip)
         self._helm(ip)
 
     def DropDockerService(self, ip):

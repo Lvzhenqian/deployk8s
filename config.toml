@@ -1,5 +1,5 @@
 [Kubeconf]
-Version = "1.13.2"
+Version = "1.13.4"
 # 客户端访问apiserver的url地址,如果使用haproxy请配置端口非6443默认值。
 LoadBalancer= "192.168.8.231:6443"
 # services地址范围
