@@ -1,3 +1,5 @@
+[TOC]
+
 # k8s部署脚本
     支持单master 多master 以及 keepalived+haproxy 多master等。
 ## 环境要求
@@ -18,7 +20,9 @@
 #### 存储：
     rook-ceph  
 #### 包安装管理：
-    helm 
+    helm
+#### 容器行为管理
+    falco
 
 ## 安装python依赖
     pip install -r requirements.txt
