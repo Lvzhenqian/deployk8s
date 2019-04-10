@@ -1,5 +1,5 @@
 [Kubeconf]
-Version = "1.13.4"
+Version = "1.13.5"
 # 客户端访问apiserver的url地址,如果使用haproxy请配置端口非6443默认值。
 LoadBalancer= "192.168.8.231:6443"
 # services地址范围
@@ -21,7 +21,7 @@ KubeletData = "/data/kubelet"
 # kube-proxy 模式 ipvs|iptables
 ProxyMode = "ipvs"
 # helm 版本号
-HelmVersion = "v2.12.1"
+HelmVersion = "v2.13.1"
 # NodeName 前缀，不能留空，增加节点时会使用到
 Perfix = "k8s-"
 # 网络插件选择[calico|flannel]
@@ -30,6 +30,8 @@ NetworkAddons = "calico"
 MTU = "1430"
 # 监控插件[heapster|prometheus]
 MetricAddons = "prometheus"
+# prometheus 监控grafana管理员admin密码配置
+PrometheusGrafanaPass = "zw-9898w"
 # 增加节点时要使用token 与证书hash值，部署时不必填写，部署完成后会回写配置文件。
 Token = ""
 CertHash = ""

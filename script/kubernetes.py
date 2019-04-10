@@ -343,7 +343,7 @@ vrrp_instance haproxy-vip {
         # 回写整个配置文件
         self.cfg['Kubeconf']["Token"] = self.token
         self.cfg['Kubeconf']["CertHash"] = self.CertHash
-        with open(os.path.join(self.ScriptPath, "config.toml"), mode="w") as fd:
+        with open(self.ConfPath, mode="w") as fd:
             toml.dump(self.cfg, fd)
 
     def SchedulerToMaster(self):
@@ -462,12 +462,41 @@ vrrp_instance haproxy-vip {
 
     def _Prometheus(self, ip):
         self.logger.info(u"开始安装prometheus到k8s里")
+        if not os.path.exists(self.tmp):
+            os.mkdir(self.tmp)
+        ValueFile = {
+            "alertmanager": {
+                'alertmanagerSpec': {'image': dict(repository="registry.matchvs.com/k8s/alertmanager", tag="v0.16.1")}
+            },
+            "grafana": {'adminPassword': self.GrafanaPassword,
+                        "image": dict(repository="registry.matchvs.com/k8s/grafana", tag="6.0.2")},
+            "prometheusOperator": {'cleanupCustomResource': True,
+                                   'image': dict(
+                                       repository="registry.matchvs.com/k8s/prometheus-operator", tag="v0.29.0"),
+                                   'configmapReloadImage': dict(
+                                       repository="registry.matchvs.com/k8s/configmap-reload", tag="v0.0.1"),
+                                   'prometheusConfigReloaderImage': dict(
+                                       repository="registry.matchvs.com/k8s/prometheus-config-reloader", tag="v0.29.0"),
+                                   "hyperkubeImage": dict(
+                                       repository="registry.matchvs.com/k8s/hyperkube", tag="v1.12.1")
+                                   },
+            "prometheus": dict(prometheusSpec=dict(image=dict(repository="registry.matchvs.com/k8s/prometheus", tag="v2.7.1"))),
+            "kube-state-metrics": {'image': dict(repository="registry.matchvs.com/k8s/kube-state-metrics", tag="v1.5.0")
+            },
+            "prometheus-node-exporter": {"image": dict(repository="registry.matchvs.com/k8s/node-exporter",
+                                                       tag="v0.17.0")}
+        }
+        pro = os.path.join(self.tmp, 'prometheus.yaml')
+        with open(pro, mode='w') as f:
+            yaml.safe_dump(ValueFile, stream=f, encoding="utf-8", allow_unicode=True,
+                           default_flow_style=False)
         with self.SSH(ip) as ssh:
-            ssh.mkdirs('/tmp/prometheus')
-            self._SSL_sender("./k8s/prometheus", '/tmp/prometheus', ip)
-            ssh.runner('kubectl create -f /tmp/prometheus')
-            time.sleep(2)
-            ssh.runner('kubectl create -f /tmp/prometheus')
+            ssh.push(pro, "/tmp/prometheus.yaml", ip)
+            ssh.do_script("/usr/bin/helm repo update")
+            ssh.do_script(
+                "/usr/bin/helm install -f /tmp/prometheus.yaml --namespace prometheus --wait --timeout 600"
+                " --name prometheus stable/prometheus-operator --version 5.0.10")
+        return self.logger.info("prometheus install successfully!")
 
     def _rook(self, kubectl):
         self.logger.info("开始安装rook程序")
@@ -503,12 +532,15 @@ vrrp_instance haproxy-vip {
         ssh.push("./k8s/helm/helm", "/usr/bin/helm", kubectl)
         ssh.runner("chmod a+x /usr/bin/helm")
         ssh.do_script("helm init --upgrade -i registry.cn-hangzhou.aliyuncs.com/google_containers/tiller:%s "
-                      "--stable-repo-url https://kubernetes.oss-cn-hangzhou.aliyuncs.com/charts" % self.HelmVersion)
+                      "--stable-repo-url http://mirror.azure.cn/kubernetes/charts/" % self.HelmVersion)
         ssh.runner("kubectl create serviceaccount --namespace kube-system tiller")
         ssh.runner(
             "kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller")
         ssh.runner(
             '''kubectl patch deploy tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}' -n kube-system''')
+        ssh.runner("/usr/bin/helm repo add bitnami https://charts.bitnami.com/bitnami")
+        ssh.runner("/usr/bin/helm repo update")
+        self.CheckRuning("tiller",kubectl)
         self.logger.info("helm install successfully!")
 
     def NetworkAddons(self, ip):
@@ -529,12 +561,12 @@ vrrp_instance haproxy-vip {
         ip = self.Masters[0]
         self.NetworkAddons(ip)
         self._dashboard(ip)
+        self._helm(ip)
         self._MetricServer(ip)
         self.MetricAddons(ip)
         self._rook(ip)
         self._kubeless(ip)
         self._falco(ip)
-        self._helm(ip)
 
     def DropDockerService(self, ip):
         self.logger.info(u"{address}: 卸载Docker服务，并删除文件！".format(address=ip))

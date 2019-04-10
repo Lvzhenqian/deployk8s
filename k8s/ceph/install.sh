@@ -35,7 +35,9 @@ function checker(){
     done
 }
 # ceph部署
-kubectl create -f operator.yaml
+/usr/bin/helm repo add rook-stable https://charts.rook.io/stable
+/usr/bin/helm repo update
+/usr/bin/helm install --name rook --namespace rook-ceph-system rook-stable/rook-ceph
 checker rook-ceph-system
 kubectl create -f cluster.yaml
 while :;do

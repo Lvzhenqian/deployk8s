@@ -7,7 +7,7 @@ cd ${filepath}
 # ceph部署
 kubectl delete -f storageclass.yaml
 kubectl delete -f cluster.yaml
-kubectl delete -f operator.yaml
+/usr/bin/helm delete --purge rook
 
-# 移除数据目录
-mv /data/rook /data/rook{,_old}
+# 删除数据目录
+rm -rf  /data/rook 

@@ -4,7 +4,9 @@ import toml
 class Config(object):
     
     def __init__(self,selfFile):
-        with open(selfFile,mode='r') as conf:
+        self.ConfPath = selfFile
+
+        with open(self.ConfPath,mode='r') as conf:
             self.cfg = toml.load(conf)
 
         self.Version = self.cfg['Kubeconf'].get('Version')
@@ -37,3 +39,4 @@ class Config(object):
         self.SshPassword = self.cfg['Ssh'].get("Password")
         self.SshPkey = self.cfg['Ssh'].get("Pkey")
         self.SshPkeypass = self.cfg['Ssh'].get("Pkeypass")
+        self.GrafanaPassword = self.cfg["Kubeconf"].get("PrometheusGrafanaPass")
