@@ -1,12 +1,19 @@
 [TOC]
 
 # k8s部署脚本
-    支持单master 多master 以及 keepalived+haproxy 多master等。
+
+支持单master 多master ，受到别人项目启发，使用nginx tcp负载均衡方式来支持apiserver的负载均衡,具体架构如下图：
+![](https://imgs.matchvs.com/static/k8s/k8s11.png)
+
+**已知问题： master 节点为偶数时，当机器宕机超过master节点半数后，会导致etcd 无法使用，整个集群全部丢失。请在部署时使用3台或者3台以上奇数的master节点来部署。**
+
 ## 环境要求
-    python: 2.7  
-    os: centos 7  
+    python: 2.7 
+    os: centos 7
 
 ##  组件说明：
+#### ingress
+    ingress-nginx (daemonset + hostPort)
 #### dns：
     coredns
 #### 网络插件：
