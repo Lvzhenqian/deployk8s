@@ -39,6 +39,7 @@ class kubernetes(BaseObject):
                 ssh.runner(cmd)
 
     def __CreateNginxHAConf(self):
+        self.logger.debug(u"开始生成nginx配置文件！！")
         if not os.path.exists(self.tmp):
             os.mkdir(self.tmp)
         nginxconf = os.path.join(self.tmp, "nginx.conf")
@@ -73,8 +74,9 @@ stream {
         return nginxconf
 
     def __MakeNginx(self, ip):
-        self.logger.debug("%s: 安装nginx并配置tcp负载均衡！！", ip)
-        confPath = self.__CreateConfig()
+        self.logger.debug(u"%s: 安装nginx并配置tcp负载均衡！！", ip)
+        confPath = self.__CreateNginxHAConf()
+        self.logger.debug(confPath)
         with self.SSH(ip) as ssh:
             ssh.push(confPath, "/etc/nginx/nginx.conf", ip)
             ssh.runner("systemctl start nginx")
@@ -103,7 +105,8 @@ stream {
         KubeProxy = dict(apiVersion='kubeproxy.config.k8s.io/v1alpha1',
                          kind='KubeProxyConfiguration',
                          mode=self.ProxyMode)
-        os.mkdir(self.tmp)
+        if not os.path.exists(self.tmp):
+            os.mkdir(self.tmp)
         InitConfig = os.path.join(self.tmp, 'k8s.yaml')
         with open(InitConfig, mode='w') as f:
             yaml.safe_dump_all([ClusterConfig, KubeProxy], stream=f, encoding="utf-8", allow_unicode=True,
@@ -426,9 +429,10 @@ stream {
         ssh = self.SSH(kubectl)
         ssh.push("./k8s/helm/helm", "/usr/bin/helm", kubectl)
         ssh.runner(r"chmod a+x /usr/bin/helm")
-        version, _ = ssh.runner(r'helm version|head -1|egrep -o "v[0-9]+\.[0-9]+\.[0-9]"')
+        version, _ = ssh.runner(r'/usr/bin/helm version|head -1|egrep -o "v[0-9]+\.[0-9]+\.[0-9]"')
+        self.logger.debug(version)
         ssh.do_script("helm init --upgrade -i registry.cn-hangzhou.aliyuncs.com/google_containers/tiller:%s "
-                      "--stable-repo-url http://mirror.azure.cn/kubernetes/charts/" % version.strip("\r\n"))
+                      "--stable-repo-url http://mirror.azure.cn/kubernetes/charts/" % version.split("\r\n")[0])
         ssh.runner("kubectl create serviceaccount --namespace kube-system tiller")
         ssh.runner(
             "kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller")
@@ -461,7 +465,7 @@ stream {
         with self.SSH(ip) as ssh:
             ssh.push(filepath, '/root/nginxvalue.yaml', ip)
             ssh.runner(
-                "helm install -f ingress/nginxvalue.yaml --name nginx --namespace nginx bitnami/nginx-ingress-controller")
+                "helm install -f /root/nginxvalue.yaml --name nginx --namespace nginx bitnami/nginx-ingress-controller")
         self.logger.info("Ingress安装成功")
 
     def NetworkAddons(self, ip):
