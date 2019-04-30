@@ -3,7 +3,6 @@
 import os, toml, yaml, time
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from .Base import BaseObject
-from copy import copy
 
 
 class kubernetes(BaseObject):
@@ -39,6 +38,49 @@ class kubernetes(BaseObject):
             for cmd in (setname, BackupHosts, InsertHosts):
                 ssh.runner(cmd)
 
+    def __CreateNginxHAConf(self):
+        if not os.path.exists(self.tmp):
+            os.mkdir(self.tmp)
+        nginxconf = os.path.join(self.tmp, "nginx.conf")
+        if not os.path.exists(nginxconf):
+            server = "\n".join(["server %s:6443         max_fails=3 fail_timeout=3s;" % i for i in self.Masters])
+            Conf = '''user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log;
+pid /run/nginx.pid;
+include /usr/share/nginx/modules/*.conf;
+worker_rlimit_nofile 65535;
+events {
+    use epoll;
+    worker_connections 65535;
+}
+
+stream {
+    upstream api-servers {
+        hash $remote_addr consistent;
+        %s
+    }
+
+    server {
+        listen %s;
+        proxy_connect_timeout 1s;
+        proxy_timeout 3s;
+        proxy_pass api-servers;
+    }
+}''' % (server, self.LoadBalancer)
+            with open(nginxconf, 'w') as f:
+                f.write(Conf)
+        return nginxconf
+
+    def __MakeNginx(self, ip):
+        self.logger.debug("%s: 安装nginx并配置tcp负载均衡！！", ip)
+        confPath = self.__CreateConfig()
+        with self.SSH(ip) as ssh:
+            ssh.push(confPath, "/etc/nginx/nginx.conf", ip)
+            ssh.runner("systemctl start nginx")
+            ssh.runner("systemctl enable nginx")
+            ssh.runner("systemctl status nginx")
+
     def __CreateConfig(self):
         name, _ = self.LoadBalancer.split(':')
         certs = set(self.Masters)
@@ -52,7 +94,6 @@ class kubernetes(BaseObject):
                              apiServer=dict(
                                  extraArgs={
                                      'authorization-mode': 'Node,RBAC',
-                                     'insecure-port': "%s" % self.InsecurePort,
                                      'service-node-port-range': self.NodePortRang
                                  },
                                  certSANs=list(certs),
@@ -136,156 +177,6 @@ class kubernetes(BaseObject):
                 )
             )
 
-    def __HaProxy(self, ip):
-        self.logger.debug(u"%s: 现在安装haproxy" % ip)
-        with self.SSH(ip) as ssh:
-            ssh.do_script("yum install -y haproxy keepalived")
-        https = [' '.join(["server", "kubernetes-https-%s" % ids, "%s:6443" % i, "check\n"]) for ids, i in
-                 enumerate(self.Masters)]
-        self.logger.debug(https)
-        http = [' '.join(["server", "kubernetes-http-%s" % ids2, "{}:{}".format(i2, self.InsecurePort), "check\n"]) for
-                ids2, i2
-                in enumerate(self.Masters)]
-        self.logger.debug(http)
-        haproxy = u'''global
-    daemon
-    nbproc    4
-    user      haproxy
-    group     haproxy
-    maxconn   50000
-    pidfile   /var/run/haproxy.pid
-    log       127.0.0.1   local0
-    chroot    /var/lib/haproxy
-
-defaults
-    log       global
-    log       127.0.0.1   local0
-    maxconn   50000
-    retries   3
-    balance   roundrobin
-    option    httplog
-    option    dontlognull
-    option    httpclose
-    option    abortonclose
-    timeout   http-request 10s
-    timeout   connect 10s
-    timeout   server 1m
-    timeout   client 1m
-    timeout   queue 1m
-    timeout   check 5s
-
-listen stats
-  bind %s:9000
-  mode http
-  stats enable
-  stats hide-version
-  stats uri /stats
-  stats refresh 30s
-  stats realm Haproxy\ Statistics
-  stats auth Matchvs:Matchvs-Password
-  
-frontend kubernetes-https
-    bind 0.0.0.0:%s  #使用0.0.0.0主要是在使用svip 时能够使得vip的端口能访问
-    mode tcp
-    option tcplog
-    tcp-request inspect-delay 5s
-    tcp-request content accept if { req.ssl_hello_type 1 }
-    default_backend kubernetes-https
-backend kubernetes-https
-    mode tcp
-    option tcplog
-    option tcp-check
-    balance roundrobin
-    default-server inter 10s downinter 5s rise 2 fall 2 slowstart 60s maxconn 250 maxqueue 256 weight 100
-    %s
-    
-frontend kubernetes-http
-    bind %s
-    mode tcp
-    option tcplog
-    default_backend kubernetes-http
-backend kubernetes-http
-    mode tcp
-    option tcplog
-    option tcp-check
-    balance roundrobin
-    default-server inter 10s downinter 5s rise 2 fall 2 slowstart 60s maxconn 250 maxqueue 256 weight 100
-    %s      
-''' % (ip, self.LoadBalancer.split(":")[-1], '    '.join(https), "%s:680" % ip, '    '.join(http))
-        with self.SSH(ip) as ssh:
-            ssh.runner('''echo "%s" > /etc/haproxy/haproxy.cfg''' % haproxy)
-            ssh.runner("systemctl start haproxy")
-            ssh.runner("systemctl enable haproxy")
-            ssh.runner("systemctl status haproxy")
-
-    def __KeepAlived(self, ip, flag, pid):
-        self.logger.debug(u"%s: 现在安装keepalived" % ip)
-        OtherList = copy(self.Masters)
-        OtherList.remove(ip)
-        other = '\n'.join(OtherList)
-        # self.logger.debug(OtherList)
-        keepalived = u'''! Configuration File for keepalived
-global_defs {
-   notification_email {
-   }
-   router_id kubernetes-api
-}
-
-vrrp_script kubernetes {
-    # 自身状态检测
-    script "killall -0 haproxy"  #检查haproxy进程是否存在
-    interval 3
-    weight 5
-}
-
-vrrp_instance haproxy-vip {
-    # 使用单播通信，默认是组播通信
-    unicast_src_ip %s
-    unicast_peer {
-        %s
-    }
-    # 初始化状态
-    state %s   #slave节点就修改为BACKUP
-    # 虚拟ip 绑定的网卡
-    interface %s
-    # 此ID 要与Backup 配置一致
-    virtual_router_id 51
-    # 默认启动优先级，要比Backup 大点，但要控制量，保证自身状态检测生效
-    priority %s    #slave 修改比这个数值要小一点
-    advert_int 1
-    authentication {
-        auth_type PASS
-        auth_pass 1111
-    }
-    virtual_ipaddress {
-        # 虚拟ip 地址
-        %s
-    }
-    track_script {
-        kubernetes
-    }
-}
-''' % (ip, other, flag, self.InterfaceName, pid, self.Vip)
-        with self.SSH(ip) as ssh:
-            ssh.runner('''echo "%s" > /etc/keepalived/keepalived.conf''' % keepalived)
-            ssh.runner('''echo "net.ipv4.ip_nonlocal_bind = 1" > /etc/sysctl.d/keepalive.conf''')
-            ssh.runner("sysctl --system")
-            ssh.runner("systemctl start keepalived")
-            ssh.runner("systemctl enable keepalived")
-            ssh.runner("systemctl status keepalived")
-
-    def __MakeHA(self):
-        if self.KeepAlived:
-            self.logger.info(u"开始给Master服务器安装keepalived 与haproxy")
-            self.logger.debug(self.Masters)
-            for index, ip in enumerate(self.Masters):
-                self.logger.debug(ip)
-                flag = "MASTER" if index == 0 else 'BACKUP'
-                pid = 100 if index == 0 else 98
-                self.__HaProxy(ip)
-                self.__KeepAlived(ip, flag, pid)
-        return
-
     def MakeInitPath(self):
         self.logger.warning(u"初始化服务器，结束后会把相应的服务器重启！！")
         pool = ThreadPoolExecutor()
@@ -331,8 +222,9 @@ vrrp_instance haproxy-vip {
 
     def MakeMaster(self):
         self.logger.info("初始化Masters")
+        with ThreadPoolExecutor(max_workers=len(self.Masters)) as pool:
+            wait([pool.submit(self.__MakeNginx, ip) for ip in self.Masters], timeout=3600, return_when=ALL_COMPLETED)
         if len(self.Masters) > 1:
-            self.__MakeHA()
             self.__MakeMultiMaster()
         else:
             ip = self.Masters[0]
@@ -402,6 +294,8 @@ vrrp_instance haproxy-vip {
             nodes = [pool.submit(self.__kubeadm, ip, shell) for ip in DoIpList]
             for oj in nodes:
                 self.logger.debug(oj.result())
+        with ThreadPoolExecutor() as pool:
+            wait([pool.submit(self.__MakeNginx, i) for i in DoIpList], timeout=3600, return_when=ALL_COMPLETED)
         self.logger.info(u"添加node节点进k8s里！！")
         with ThreadPoolExecutor() as pool:
             ret = [pool.submit(self.__JoinNode, ip) for ip in DoIpList]
@@ -480,9 +374,10 @@ vrrp_instance haproxy-vip {
                                    "hyperkubeImage": dict(
                                        repository="registry.matchvs.com/k8s/hyperkube", tag="v1.12.1")
                                    },
-            "prometheus": dict(prometheusSpec=dict(image=dict(repository="registry.matchvs.com/k8s/prometheus", tag="v2.7.1"))),
+            "prometheus": dict(
+                prometheusSpec=dict(image=dict(repository="registry.matchvs.com/k8s/prometheus", tag="v2.7.1"))),
             "kube-state-metrics": {'image': dict(repository="registry.matchvs.com/k8s/kube-state-metrics", tag="v1.5.0")
-            },
+                                   },
             "prometheus-node-exporter": {"image": dict(repository="registry.matchvs.com/k8s/node-exporter",
                                                        tag="v0.17.0")}
         }
@@ -516,7 +411,7 @@ vrrp_instance haproxy-vip {
             ssh.runner("mv /tmp/kubeless/kubeless /bin/kubeless")
             ssh.runner('kubectl create -f /tmp/kubeless')
 
-    def _falco(self,ip):
+    def _falco(self, ip):
         self.logger.info("开始安装falco程序")
         with self.SSH(ip) as ssh:
             ssh.mkdirs('/tmp/falco')
@@ -530,9 +425,10 @@ vrrp_instance haproxy-vip {
         self.logger.info("开始安装helm程序")
         ssh = self.SSH(kubectl)
         ssh.push("./k8s/helm/helm", "/usr/bin/helm", kubectl)
-        ssh.runner("chmod a+x /usr/bin/helm")
+        ssh.runner(r"chmod a+x /usr/bin/helm")
+        version, _ = ssh.runner(r'helm version|head -1|egrep -o "v[0-9]+\.[0-9]+\.[0-9]"')
         ssh.do_script("helm init --upgrade -i registry.cn-hangzhou.aliyuncs.com/google_containers/tiller:%s "
-                      "--stable-repo-url http://mirror.azure.cn/kubernetes/charts/" % self.HelmVersion)
+                      "--stable-repo-url http://mirror.azure.cn/kubernetes/charts/" % version.strip("\r\n"))
         ssh.runner("kubectl create serviceaccount --namespace kube-system tiller")
         ssh.runner(
             "kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller")
@@ -540,8 +436,33 @@ vrrp_instance haproxy-vip {
             '''kubectl patch deploy tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}' -n kube-system''')
         ssh.runner("/usr/bin/helm repo add bitnami https://charts.bitnami.com/bitnami")
         ssh.runner("/usr/bin/helm repo update")
-        self.CheckRuning("tiller",kubectl)
+        self.CheckRuning("tiller", kubectl)
         self.logger.info("helm install successfully!")
+
+    def __IngressNginx(self, ip, other=None):
+        self.logger.info("开始安装Ingress！！")
+        NginxValue = dict(
+            daemonset=dict(useHostPort=True, hostPorts=dict(http=80, https=443)),
+            extraEnvs=[dict(name="TZ", value="Asia/Shanghai")],
+            kind="DaemonSet",
+            updateStrategy=dict(rollingUpdate=dict(maxUnavailable=1), type="RollingUpdate"),
+            service=dict(type="NodePort", nodePorts=dict(http=80, https=443)),
+            securityContext=dict(fsGroup=1000, runAsUser=1000),
+            stats=dict(enable=True),
+            metrics=dict(enable=True)
+        )
+        if other and isinstance(other, dict):
+            NginxValue.update(other)
+
+        filepath = os.path.join(self.tmp, "nginxvalue.yaml")
+        with open(filepath, mode='w') as f:
+            yaml.safe_dump(NginxValue, stream=f, encoding="utf-8", allow_unicode=True,
+                           default_flow_style=False)
+        with self.SSH(ip) as ssh:
+            ssh.push(filepath, '/root/nginxvalue.yaml', ip)
+            ssh.runner(
+                "helm install -f ingress/nginxvalue.yaml --name nginx --namespace nginx bitnami/nginx-ingress-controller")
+        self.logger.info("Ingress安装成功")
 
     def NetworkAddons(self, ip):
         switch = {
@@ -550,39 +471,23 @@ vrrp_instance haproxy-vip {
         }
         return switch[self.Network](ip)
 
-    def MetricAddons(self, ip):
-        switch = {
-            "heapster": self._heapster,
-            "prometheus": self._Prometheus
-        }
-        return switch[self.Metric](ip)
-
     def Addons(self):
         ip = self.Masters[0]
         self.NetworkAddons(ip)
         self._dashboard(ip)
         self._helm(ip)
         self._MetricServer(ip)
-        self.MetricAddons(ip)
+        self._Prometheus(ip)
         self._rook(ip)
         self._kubeless(ip)
         self._falco(ip)
+        self.__IngressNginx(ip)
 
-    def DropDockerService(self, ip):
-        self.logger.info(u"{address}: 卸载Docker服务，并删除文件！".format(address=ip))
-        ssh = self.SSH(ip)
-        ssh.runner("umount -l $(mount |awk '/kubelet/{print $3}')")
-        ssh.runner("umount -l $(mount |awk '/kubelet/{print $3}')")
-        ssh.runner('systemctl stop docker')
+    def __Reset(self, ip):
+        with self.SSH(ip) as ssh:
+            ssh.do_script("kubeadm reset --force")
+            ssh.runner("systemctl stop docker")
 
-    def DropNodeService(self, ip):
-        self.logger.info(u"{address}: 清理Node！！".format(address=ip))
-        ssh = self.SSH(ip)
-        ssh.runner("systemctl stop kubelet")
-        ssh.runner("rm -rf /etc/systemd/system/kube*")
-
-    def DropRookService(self):
-        self.logger.info(u"移除rook服务!!")
-        ssh = self.SSH(self.Masters[0])
-        ssh.runner("kubectl delete namespace rook-ceph")
-        ssh.runner("kubectl delete namespace rook-ceph-system")
+    def Remove(self):
+        with ThreadPoolExecutor(max_workers=10) as th:
+            wait([th.submit(self.__Reset, ip) for ip in self.ALL_IP], timeout=3600, return_when=ALL_COMPLETED)

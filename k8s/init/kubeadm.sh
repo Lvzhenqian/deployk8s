@@ -3,6 +3,34 @@ Version="1.13.2"
 DockerVersion="3:docker-ce-18.09.2-3.el7.x86_64"
 DockerData="/data/docker"
 KubeletData="/data/kubelet"
+# 安装基础软件
+Yum_software="
+psmisc
+lrzsz
+vim
+ntpdate
+make
+net-tools 
+ipset 
+socat 
+ipvsadm 
+conntrack-tools.x86_64 
+iptables 
+iptables-services 
+wget 
+nfs-utils 
+conntrack-tools 
+yum-utils
+device-mapper-persistent-data 
+lvm2 
+curl 
+openssl 
+openssl-devel
+yum-plugin-versionlock
+nginx
+"
+yum remove docker docker-common docker-selinux docker-engine -y
+yum install -y ${Yum_software}
 echo "准备安装docker"
 if ping -c 1 www.google.com &> /dev/null;then
     yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo

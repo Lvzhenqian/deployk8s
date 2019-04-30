@@ -1,6 +1,6 @@
 # coding:utf-8
-import sys
-from script.kubernetes import *
+import sys,os
+from script.kubernetes import kubernetes
 
 class Manager(kubernetes):
     def __init__(self,conf):
@@ -12,9 +12,6 @@ class Manager(kubernetes):
         self.InitCheck()
         # 初始化服务器配置与参数等
         self.MakeInitPath()
-
-    # def makeconfig(self):
-    #     print self._kubernetes__CreateConfig()
 
     def Install(self):
         try:
@@ -35,10 +32,7 @@ class Manager(kubernetes):
             sys.exit(0)
     def remove(self):
         self.logger.info(u"开始删除kubernetes")
-        self.DropRookService()
-        for ip in self.ALL_IP:
-            self.DropDockerService(ip)
-            self.DropNodeService(ip)
+        self.remove()
 
 
 if __name__ == '__main__':

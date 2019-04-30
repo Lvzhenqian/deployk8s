@@ -1,61 +1,22 @@
 [Kubeconf]
-Version = "1.13.5"
-# 客户端访问apiserver的url地址,如果使用haproxy请配置端口非6443默认值。
-LoadBalancer= "192.168.8.231:6443"
-# services地址范围
-ServiceCidr = "10.254.0.0/16"
-# PodIP地址范围
-PodCidr = "172.30.0.0/16"
-# apiserver http端口
-InsecurePort = "8080"
-# k8s nodePort地址范围
-NodePortRang = "80-39000"
-# 安装的docker版本号
-DockerVersion = "3:docker-ce-18.09.2-3.el7.x86_64"
-# docker 数据目录
-DockerData = '/data/docker'
-# etcd数据目录
-EtcdData = "/data/etcd"
-# Kubelet数据目录
-KubeletData = "/data/kubelet"
-# kube-proxy 模式 ipvs|iptables
-ProxyMode = "ipvs"
-# helm 版本号
-HelmVersion = "v2.13.1"
-# NodeName 前缀，不能留空，增加节点时会使用到
-Perfix = "k8s-"
-# 网络插件选择[calico|flannel]
-NetworkAddons = "calico"
-# Calico MTU值 （阿里云1440|京东云1430）
-MTU = "1430"
-# 监控插件[heapster|prometheus]
-MetricAddons = "prometheus"
-# prometheus 监控grafana管理员admin密码配置
-PrometheusGrafanaPass = "zw-9898w"
+# etcd docker 与kubelet等数据存储路径,默认值 /data。
+DataDir = "/data"
+# Calico MTU值, 默认1440 （阿里云1440|京东云1430）
+MTU = ""
+# prometheus 监控grafana管理员admin密码配置,默认值 TestAdmin567
+PrometheusGrafanaPass = "TestAdmin567"
 # 增加节点时要使用token 与证书hash值，部署时不必填写，部署完成后会回写配置文件。
 Token = ""
 CertHash = ""
 
-[HA]
-# 是否使用keepalived 与haproxy,已经有负载均衡器的请填0.
-# keepalived 只会安装在master机器上
-Enable = 0
-# keepalived网卡名，用于keepalived的配置文件
-# 所有master节点请统一一个网卡命名
-InterfaceName = "eth0"
-# vip 地址，LoadBalancer 解析到的IP地址
-vip = "192.168.8.231"
-
 [Master]
 # k8s master集群地址
-IPS = [ "192.168.8.231" ]
+IPS = [ "192.168.8.231","192.168.8.232" ]
 
 [Node]
 # K8s Node节点配置，左边是服务器ip地址，右边是节点名称.
-# 右边前缀表示部署的 label属性，会在matchvs脚本里打label到node上
-# matchvs表示引擎，gs表示gameserver服务器
-"192.168.8.231" = "matchvs-192.168.8.231"
-"192.168.8.232" = "gs-192.168.8.231"
+"192.168.8.231" = "master1"
+"192.168.8.232" = "node1"
 
 [Ssh]
 # ssh登陆端口，账号密码，请统一一个
@@ -64,7 +25,3 @@ Port = 22
 Username = "root"
 # root密码
 Password = "hd8832508"
-# （测试）使用私钥连接
-Pkey = ""
-# （测试）私钥密码
-Pkeypass = ""

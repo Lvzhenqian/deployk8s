@@ -108,33 +108,6 @@ systemctl stop firewalld
 systemctl disable firewalld
 /sbin/iptables-save > /root/iptables.bak
 iptables -F &&  iptables -X &&  iptables -F -t nat &&  iptables -X -t nat && iptables -P FORWARD ACCEPT
-# 安装基础软件
-Yum_software="
-psmisc
-lrzsz
-vim
-ntpdate
-make
-net-tools 
-ipset 
-socat 
-ipvsadm 
-conntrack-tools.x86_64 
-iptables 
-iptables-services 
-wget 
-nfs-utils 
-conntrack-tools 
-yum-utils
-device-mapper-persistent-data 
-lvm2 
-curl 
-openssl 
-openssl-devel
-yum-plugin-versionlock
-"
-yum remove docker docker-common docker-selinux docker-engine -y
-yum install -y ${Yum_software}
 /usr/sbin/ntpdate cn.ntp.org.cn
 /usr/sbin/clock -w
 echo "10 * * * * /usr/sbin/ntpdate cn.ntp.org.cn &>/dev/null;/usr/sbin/clock -w" >> /var/spool/cron/root
