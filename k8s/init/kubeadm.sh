@@ -27,10 +27,10 @@ curl
 openssl 
 openssl-devel
 yum-plugin-versionlock
-nginx
 "
 yum remove docker docker-common docker-selinux docker-engine -y
 yum install -y ${Yum_software}
+echo "安装软件： ${Yum_software}, 状态：$?"
 echo "准备安装docker"
 if ping -c 1 www.google.com &> /dev/null;then
     yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo

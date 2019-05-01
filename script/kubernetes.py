@@ -78,6 +78,7 @@ stream {
         confPath = self.__CreateNginxHAConf()
         self.logger.debug(confPath)
         with self.SSH(ip) as ssh:
+            ssh.runner("yum install -y nginx")
             ssh.push(confPath, "/etc/nginx/nginx.conf", ip)
             ssh.runner("systemctl start nginx")
             ssh.runner("systemctl enable nginx")
@@ -227,6 +228,7 @@ stream {
         self.logger.info("初始化Masters")
         with ThreadPoolExecutor(max_workers=len(self.Masters)) as pool:
             wait([pool.submit(self.__MakeNginx, ip) for ip in self.Masters], timeout=3600, return_when=ALL_COMPLETED)
+
         if len(self.Masters) > 1:
             self.__MakeMultiMaster()
         else:
@@ -246,6 +248,31 @@ stream {
         # 去掉master不调度规则
         for ip in self.Masters:
             self.__UntaintNode(ip, self.Perfix + self.Nodes[ip])
+
+    def __CheckMasters(self):
+        FailMaster = []
+        with self.SSH(self.Masters[0]) as k8s:
+            for ip in self.Masters[1:]:
+                state,_ = k8s.runner("kubectl get nodes|awk '/%s/{print $3}'"%self.Nodes[ip])
+                if state.strip("\r\n") != "master":
+                    FailMaster.append(ip)
+        return FailMaster
+
+    def ReAddMaster(self):
+        self.logger.info(u"检查master安装是否完整！！")
+        fail = self.__CheckMasters()
+        if not fail:
+            return self.logger.info(u"Master安全完整，没有错误节点！！")
+        self.logger.warning(u"检测到有添加master失败的节点，重新尝试添加！！")
+        # reset node
+        for ip in fail:
+            with self.SSH(ip) as ssh:
+                ssh.runner("kubeadm reset --force")
+        # copy ca key
+        self.__CopyCrts(self.Masters[0],fail)
+        # do add again
+        for ip in fail:
+            self.__JoinMaster(ip)
 
     def __ExtendNodeIP(self):
         with self.SSH(self.Masters[0]) as k8s:
@@ -450,7 +477,6 @@ stream {
             extraEnvs=[dict(name="TZ", value="Asia/Shanghai")],
             kind="DaemonSet",
             updateStrategy=dict(rollingUpdate=dict(maxUnavailable=1), type="RollingUpdate"),
-            service=dict(type="NodePort", nodePorts=dict(http=80, https=443)),
             securityContext=dict(fsGroup=1000, runAsUser=1000),
             stats=dict(enable=True),
             metrics=dict(enable=True)
@@ -466,7 +492,9 @@ stream {
             ssh.push(filepath, '/root/nginxvalue.yaml', ip)
             ssh.runner(
                 "helm install -f /root/nginxvalue.yaml --name nginx --namespace nginx bitnami/nginx-ingress-controller")
-        self.logger.info("Ingress安装成功")
+            self.logger.info(u"重启kube-proxy，防止容器卡死")
+            ssh.do_script('''for i in $(kubectl -n kube-system get pods  -l k8s-app=kube-proxy|awk '/kube-proxy/{print $1}');do kubectl -n kube-system delete pod $i;done''')
+        self.logger.info(u"Ingress安装成功")
 
     def NetworkAddons(self, ip):
         switch = {

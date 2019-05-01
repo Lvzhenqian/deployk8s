@@ -19,6 +19,8 @@ class Manager(kubernetes):
             self.MakeAll()
             # 增加master
             self.MakeMaster()
+            # 检查master，并重新添加失败节点
+            self.ReAddMaster()
             # 去除master节点调度策略
             self.SchedulerToMaster()
             # 增加node
