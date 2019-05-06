@@ -138,5 +138,6 @@ class SSH(object):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.logger.error((exc_type,exc_val,exc_tb))
+        if exc_tb or exc_type or exc_val:
+            self.logger.error((exc_type,exc_val,exc_tb))
         return self.client.close()
