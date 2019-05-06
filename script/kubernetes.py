@@ -64,8 +64,8 @@ stream {
 
     server {
         listen %s;
-        proxy_connect_timeout 1s;
-        proxy_timeout 3s;
+        proxy_connect_timeout 3s;
+        proxy_timeout 1800s;
         proxy_pass api-servers;
     }
 }''' % (server, self.LoadBalancer)
@@ -106,11 +106,14 @@ stream {
         KubeProxy = dict(apiVersion='kubeproxy.config.k8s.io/v1alpha1',
                          kind='KubeProxyConfiguration',
                          mode=self.ProxyMode)
+        KubeLet = dict(apiVersion='kubelet.config.k8s.io/v1beta1',
+                         kind='KubeletConfiguration',
+                         MaxPods=300)
         if not os.path.exists(self.tmp):
             os.mkdir(self.tmp)
         InitConfig = os.path.join(self.tmp, 'k8s.yaml')
         with open(InitConfig, mode='w') as f:
-            yaml.safe_dump_all([ClusterConfig, KubeProxy], stream=f, encoding="utf-8", allow_unicode=True,
+            yaml.safe_dump_all([ClusterConfig, KubeProxy,KubeLet], stream=f, encoding="utf-8", allow_unicode=True,
                                default_flow_style=False)
         return InitConfig
 
