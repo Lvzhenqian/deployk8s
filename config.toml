@@ -1,10 +1,13 @@
 [Kubeconf]
 # etcd docker 与kubelet等数据存储路径,默认值 /data。
 DataDir = "/data"
-# Calico MTU值, 默认1440 （阿里云1440|京东云1430）
+# 网络插件选择 flannel 和 calico ,注意azure不支持calico
+NetworkAddons = "flannel"
+# Calico MTU值, 默认1440 （阿里云1440|京东云1430）,选择calico需更改此值
 MTU = ""
 # prometheus 监控grafana管理员admin密码配置,默认值 TestAdmin567
 PrometheusGrafanaPass = "TestAdmin567"
+
 # 增加节点时要使用token 与证书hash值，部署时不必填写，部署完成后会回写配置文件。
 Token = ""
 CertHash = ""
@@ -14,7 +17,7 @@ CertHash = ""
 IPS = [ "192.168.8.231","192.168.8.232" ]
 
 [Node]
-# K8s Node节点配置，左边是服务器ip地址，右边是节点名称.
+# K8s Node节点配置，左边是服务器ip地址，右边是节点名称
 "192.168.8.231" = "master1"
 "192.168.8.232" = "node1"
 
