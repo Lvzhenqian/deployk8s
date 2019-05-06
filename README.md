@@ -30,6 +30,8 @@
     helm
 #### 容器行为管理
     falco
+##安装python-pip
+yum -y install python-pip
 
 ## 安装python依赖
     pip install -r requirements.txt
