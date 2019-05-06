@@ -30,8 +30,18 @@
     helm
 #### 容器行为管理
     falco
-##安装python-pip
-yum -y install python-pip
+## 关闭selinux和防火墙
+    sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config 
+
+    setenforce 0
+
+    systemctl stop firewalld
+    
+    systemctl disable firewalld
+
+
+## 安装python-pip
+    yum -y install python-pip
 
 ## 安装python依赖
     pip install -r requirements.txt
