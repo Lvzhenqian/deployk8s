@@ -294,7 +294,7 @@ stream {
                 NotKubelet.append(ip)
             except Exception as e:
                 self.logger.debug("%s: %s", ip, e)
-                break
+                continue
         return NotKubelet
 
     def ExtendEnv(self):
