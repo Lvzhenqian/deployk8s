@@ -302,6 +302,7 @@ stream {
         pool = ThreadPoolExecutor()
         ips = self.__ExtendNodeIP()
         lst = self.__NotKubeletNodes(ips)
+        self.logger.debug("ips: %s -> doing: %s",ips,lst)
         # 安装服务器环境准备
         AllEnv = [pool.submit(self.Env, ip) for ip in lst]
         wait(AllEnv, timeout=3600, return_when=ALL_COMPLETED)

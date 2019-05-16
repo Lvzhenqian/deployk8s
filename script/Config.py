@@ -9,7 +9,7 @@ class Config(object):
         with open(self.ConfPath,mode='r') as conf:
             self.cfg = toml.load(conf)
 
-        self.Version = self.cfg['Kubeconf'].get('Version',"1.13.5")
+        self.Version = self.cfg['Kubeconf'].get('Version',"1.13.6")
         self.BaseDataDir = self.cfg['Kubeconf'].get('DataDir',"/data")
         self.ServiceCidr = self.cfg['Kubeconf'].get('ServiceCidr',"10.254.0.0/16")
         self.PodCidr = self.cfg['Kubeconf'].get('PodCidr',"172.30.0.0/16")

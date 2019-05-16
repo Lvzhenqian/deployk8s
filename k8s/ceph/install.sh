@@ -34,18 +34,26 @@ function checker(){
         done
     done
 }
+
+function ready(){
+    nodes=($(kubectl get node|awk '/k8s/{print $1}'))
+    for name in ${nodes};do
+        while :;do 
+            status=$(kubectl -n rook-ceph get pods|awk '/'${name}'/{print $3}')
+            if [[ "${status}" == "Completed" ]];then
+                break
+            else
+                sleep 20
+                status=$(kubectl -n rook-ceph get pods|awk '/'${name}'/{print $3}')
+            fi
+        done
+    done
+}
 # ceph部署
 /usr/bin/helm repo add rook-stable https://charts.rook.io/stable
 /usr/bin/helm repo update
 /usr/bin/helm install --name rook --namespace rook-ceph-system rook-stable/rook-ceph
 checker rook-ceph-system
 kubectl create -f cluster.yaml
-while :;do
-    if kubectl -n rook-ceph get pods |grep "osd-[0-9]" &> /dev/null;then
-        break
-    else
-        kubectl -n rook-ceph get pods
-    fi
-    sleep 20
-done
+ready
 kubectl create -f storageclass.yaml
