@@ -1,4 +1,12 @@
 [Kubeconf]
+# 插件列表，helm 与 metric-server由于其他组件依赖所以必装
+Plugins = [
+    "ceph",
+    "dashboard",
+    "kubeless",
+    "falco",
+    "prometheus",
+]
 # etcd docker 与kubelet等数据存储路径,默认值 /data。
 DataDir = "/data"
 # 网络插件选择 flannel 和 calico ,注意azure不支持calico
@@ -14,12 +22,13 @@ CertHash = ""
 
 [Master]
 # k8s master集群地址
-IPS = [ "192.168.8.231","192.168.8.232" ]
+IPS = [ 
+    "192.168.8.231"
+]
 
 [Node]
-# K8s Node节点配置，左边是服务器ip地址，右边是节点名称
+# 左边是节点内网ip地址，右边是对应显示的node名称
 "192.168.8.231" = "master1"
-"192.168.8.232" = "node1"
 
 [Ssh]
 # ssh登陆端口，账号密码，请统一一个

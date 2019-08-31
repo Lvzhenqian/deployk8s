@@ -10,16 +10,17 @@ class Config(object):
             self.cfg = toml.load(conf)
 
         self.Version = self.cfg['Kubeconf'].get('Version',"1.13.6")
-        self.BaseDataDir = self.cfg['Kubeconf'].get('DataDir',"/data")
+        self.BaseDataDir = self.cfg['Kubeconf'].get('DataDir',"/data/kubernetes")
         self.ServiceCidr = self.cfg['Kubeconf'].get('ServiceCidr',"10.254.0.0/16")
         self.PodCidr = self.cfg['Kubeconf'].get('PodCidr',"172.30.0.0/16")
-        self.NodePortRang = self.cfg['Kubeconf'].get('NodePortRang',"7000-39000")
+        self.NodePortRang = self.cfg['Kubeconf'].get('NodePortRang',"30000-50000")
         self.DockerVersion = self.cfg['Kubeconf'].get('DockerVersion',"3:docker-ce-18.09.2-3.el7.x86_64")
         self.DockerData = os.path.join(self.BaseDataDir,"docker")
         self.EtcdData = os.path.join(self.BaseDataDir,"etcd")
         self.KubeletData = os.path.join(self.BaseDataDir,"kubelet")
         self.ProxyMode = self.cfg['Kubeconf'].get('ProxyMode',"ipvs")
-        self.Perfix = "k8s-"
+        self.Perfix = ""
+        self.Plugins = self.cfg["Kubeconf"].get("Plugins")
         self.Network = self.cfg['Kubeconf'].get('NetworkAddons',"calico")
         self.MTU = self.cfg['Kubeconf'].get('MTU',"1440")
         self.token = self.cfg['Kubeconf'].get('Token')

@@ -372,14 +372,6 @@ stream {
         ssh.runner('kubectl create -f /tmp/dashboard')
         self.CheckRuning(name="dashboard", ip=kubectl)
 
-    def _heapster(self, kubectl):
-        ssh = self.SSH(kubectl)
-        ssh.mkdirs('/tmp/heapster')
-        self._SSL_sender("./k8s/heapster", '/tmp/heapster', kubectl)
-        ssh.runner('kubectl create -f /tmp/heapster')
-        self.CheckRuning(name="monitoring-influxdb", ip=kubectl)
-        self.CheckRuning(name="heapster", ip=kubectl)
-        self.CheckRuning(name="monitoring-grafana", ip=kubectl)
 
     def _MetricServer(self, ip):
         self.logger.info(u"开始安装metric-server到k8s里")
@@ -509,14 +501,18 @@ stream {
 
     def Addons(self):
         ip = self.Masters[0]
+        switchlist = {
+            "ceph": self._rook,
+            "dashboard": self._dashboard,
+            "kubeless": self._kubeless,
+            "falco": self._falco,
+            "prometheus": self._Prometheus
+        }
         self.NetworkAddons(ip)
-        self._dashboard(ip)
         self._helm(ip)
         self._MetricServer(ip)
-        self._Prometheus(ip)
-        self._rook(ip)
-        self._kubeless(ip)
-        self._falco(ip)
+        for plugin in self.Plugins:
+            switchlist[plugin](ip)
         self.__IngressNginx(ip)
 
     def __Reset(self, ip):
