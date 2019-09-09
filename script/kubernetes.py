@@ -89,7 +89,7 @@ stream {
         certs = set(self.Masters)
         certs.add(name)
         ClusterConfig = dict(apiVersion='kubeadm.k8s.io/v1beta1', kind='ClusterConfiguration',
-                             etcd=dict(local=dict(imageRepository='mirrorgooglecontainers', imageTag='3.2.24',
+                             etcd=dict(local=dict(imageRepository='gcr.azk8s.cn/google_containers',
                                                   dataDir='/data/etcd')),
                              networking=dict(serviceSubnet=self.ServiceCidr, podSubnet=self.PodCidr),
                              dns=dict(type='CoreDNS', imageRepository='coredns'), kubernetesVersion=self.Version,
@@ -101,7 +101,7 @@ stream {
                                  },
                                  certSANs=list(certs),
                                  timeoutForControlPlane='4m0s'),
-                             imageRepository='mirrorgooglecontainers',
+                             imageRepository='gcr.azk8s.cn/google_containers',
                              useHyperKubeImage=False, clusterName='kubernetes')
         KubeProxy = dict(apiVersion='kubeproxy.config.k8s.io/v1alpha1',
                          kind='KubeProxyConfiguration',
