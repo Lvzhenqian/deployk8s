@@ -454,13 +454,11 @@ stream {
         ssh.runner(r"chmod a+x /usr/bin/helm")
         version, _ = ssh.runner(r'/usr/bin/helm version|head -1|egrep -o "v[0-9]+\.[0-9]+\.[0-9]"')
         self.logger.debug(version)
-        ssh.do_script("helm init --upgrade -i registry.cn-hangzhou.aliyuncs.com/google_containers/tiller:%s "
-                      "--stable-repo-url http://mirror.azure.cn/kubernetes/charts/" % version.split("\r\n")[0])
         ssh.runner("kubectl create serviceaccount --namespace kube-system tiller")
         ssh.runner(
             "kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller")
-        ssh.runner(
-            '''kubectl patch deploy tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}' -n kube-system''')
+        ssh.do_script("helm init --service-account tiller --upgrade -i registry.cn-hangzhou.aliyuncs.com/google_containers/tiller:%s "
+                      "--stable-repo-url http://mirror.azure.cn/kubernetes/charts/" % version.split("\r\n")[0])
         ssh.runner("/usr/bin/helm repo add bitnami https://charts.bitnami.com/bitnami")
         ssh.runner("/usr/bin/helm repo update")
         self.CheckRuning("tiller", kubectl)
