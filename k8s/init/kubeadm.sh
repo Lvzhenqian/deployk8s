@@ -34,8 +34,10 @@ echo "安装软件： ${Yum_software}, 状态：$?"
 echo "准备安装docker"
 if ping -c 1 www.google.com &> /dev/null;then
     yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    yum install -y epel-release
 else
     yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+    wget -O /etc/yum.repos.d/epel.repo http://mirrors.aliyun.com/repo/epel-7.repo
 fi
 yum makecache fast
 yum -y install ${DockerVersion}

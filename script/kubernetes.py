@@ -126,7 +126,11 @@ stream {
         ssh.runner("/bin/cp -rf /etc/kubernetes/admin.conf /root/.kube/config")
         ret, _ = ssh.runner("kubeadm token create --ttl 0 --print-join-command")
         # self.logger.debug(ret)
-        _, _, _, _, token, _, Certhash = ret.split()
+        get = ret.split(" ")
+        token = get[get.index("--token")+1]
+        Certhash = get[get.index("--discovery-token-ca-cert-hash")+1]
+        self.logger.debug(get)
+        # _, _, _, _, token, _, Certhash = ret.split()
         return token, Certhash.strip("\r\n")
 
     def __Kubeconfig(self):

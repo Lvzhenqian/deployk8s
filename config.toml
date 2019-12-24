@@ -1,10 +1,11 @@
 [Kubeconf]
+Version = "1.17.0"
+DockerVersion = "docker-ce-19.03.5-3.el7.x86_64"
 # 插件列表，helm 与 metric-server由于其他组件依赖所以必装
 Plugins = [
     "ceph",
     "dashboard",
     "kubeless",
-    "falco",
     "prometheus",
 ]
 # etcd docker 与kubelet等数据存储路径,默认值 /data。
@@ -23,12 +24,14 @@ CertHash = ""
 [Master]
 # k8s master集群地址
 IPS = [ 
-    "192.168.8.231"
+    "10.0.1.15"
 ]
 
 [Node]
 # 左边是节点内网ip地址，右边是对应显示的node名称
-"192.168.8.231" = "master1"
+"10.0.1.15" = "master"
+"10.0.1.16" = "node1"
+"10.0.1.17" = "node2"
 
 [Ssh]
 # ssh登陆端口，账号密码，请统一一个
@@ -36,4 +39,4 @@ Port = 22
 # 用户名请默认填root
 Username = "root"
 # root密码
-Password = "hd8832508"
+Password = "vagrant"
