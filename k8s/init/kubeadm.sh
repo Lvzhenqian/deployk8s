@@ -4,41 +4,12 @@ Version="1.13.2"
 DockerVersion="3:docker-ce-18.09.2-3.el7.x86_64"
 DockerData="/data/docker"
 KubeletData="/data/kubelet"
-# 安装基础软件
-Yum_software="
-psmisc
-lrzsz
-vim
-ntpdate
-make
-net-tools 
-ipset 
-socat 
-ipvsadm 
-conntrack-tools.x86_64 
-iptables 
-iptables-services 
-wget 
-nfs-utils 
-conntrack-tools 
-yum-utils
-device-mapper-persistent-data 
-lvm2 
-curl 
-openssl 
-openssl-devel
-yum-plugin-versionlock
-"
-yum remove docker docker-common docker-selinux docker-engine -y
-yum install -y ${Yum_software}
-echo "安装软件： ${Yum_software}, 状态：$?"
+
 echo "准备安装docker"
 if ping -c 1 www.google.com &> /dev/null;then
     yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-    yum install -y epel-release
 else
     yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
-    wget -O /etc/yum.repos.d/epel.repo http://mirrors.aliyun.com/repo/epel-7.repo
 fi
 yum makecache fast
 yum -y install ${DockerVersion}

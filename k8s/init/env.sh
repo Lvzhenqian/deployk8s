@@ -1,6 +1,7 @@
 #!/bin/bash
 # set -x
 # exec 1>>/tmp/env.log 2>>/tmp/env.log
+address=$1
 function Change_Limit(){
     if ! grep pam_limits.so /etc/pam.d/login > /dev/null;then
         echo "session required /lib64/security/pam_limits.so" >> /etc/pam.d/login
@@ -11,8 +12,88 @@ function Change_Limit(){
     fi
 }
 
+function change_chrony(){
+    local server="$1"
+    cp -rf /etc/chrony.conf{,_bak}
+    if ip a|grep "${server}" &> /dev/null;then
+tee  /etc/chrony.conf <<-EOF
+server ntp1.aliyun.com iburst  
+server ntp2.aliyun.com iburst  
+server ntp3.aliyun.com iburst  
+server ntp4.aliyun.com iburst
+server cn.ntp.org.cn iburst
+stratumweight 0  
+driftfile /var/lib/chrony/drift  
+rtcsync
+makestep 10 3
+allow ${server%.*}/24  
+bindcmdaddress 127.0.0.1  
+bindcmdaddress ::1
+keyfile /etc/chrony.keys  
+commandkey 1  
+generatecommandkey  
+noclientlog  
+logchange 0.5  
+logdir /var/log/chrony  
+EOF
+    else
+tee /etc/chrony.conf <<-EOF
+server ${server} iburst  
+stratumweight 0  
+driftfile /var/lib/chrony/drift  
+rtcsync  
+makestep 10 3  
+allow ${server%.*}/24 
+bindcmdaddress 127.0.0.1  
+bindcmdaddress ::1  
+keyfile /etc/chrony.keys  
+commandkey 1  
+generatecommandkey  
+noclientlog  
+logchange 0.5  
+logdir /var/log/chrony  
+EOF
+    fi
+
+    systemctl daemon-reload chronyd
+    systemctl enable chronyd
+    systemctl restart chronyd
+    systemctl status chronyd
+}
+
 # 升级系统到最新版本软件
 yum update -y
+
+# 安装基础软件
+Yum_software="
+epel-release
+psmisc
+lrzsz
+vim
+chrony
+make
+net-tools 
+ipset 
+socat 
+ipvsadm 
+conntrack-tools.x86_64 
+iptables 
+iptables-services 
+wget 
+nfs-utils 
+conntrack-tools 
+yum-utils
+device-mapper-persistent-data 
+lvm2 
+curl 
+openssl 
+openssl-devel
+yum-plugin-versionlock
+"
+yum remove docker docker-common docker-selinux docker-engine -y
+yum install -y ${Yum_software}
+echo "安装软件： ${Yum_software}, 状态：$?"
+change_chrony ${address}
 # 升级内核版本为4.4
 cat > /etc/yum.repos.d/elrepo.repo <<-EOF
 [elrepo]

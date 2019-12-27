@@ -10,7 +10,7 @@ class kubernetes(BaseObject):
     def Env(self, ip):
         ssh = self.SSH(ip)
         ssh.push(os.path.join(self.ScriptPath, "k8s/init/env.sh"), '/tmp/env.sh', ip)
-        ssh.do_script('/bin/bash /tmp/env.sh')
+        ssh.do_script('/bin/bash /tmp/env.sh %s'%ip)
         return "%s done" % ip
 
     def __RestartServer(self, ip):
