@@ -52,7 +52,7 @@ function ready(){
 # ceph部署
 /usr/bin/helm repo add rook-stable https://charts.rook.io/stable
 /usr/bin/helm repo update
-/usr/bin/helm install --name rook --namespace rook-ceph-system rook-stable/rook-ceph
+/usr/bin/helm install rook rook-stable/rook-ceph --namespace rook-ceph-system
 checker rook-ceph-system
 kubectl create -f cluster.yaml
 ready

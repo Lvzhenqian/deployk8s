@@ -17,19 +17,15 @@
 #### dns：
     coredns
 #### 网络插件：
-    calico 、 flannel
+    canal
 #### 监控：
-    heapster、prometheus、metric-server
-#### serverless：
-    kubeless
+    prometheus、metric-server
 #### 显示页面：
     kubernetes-dashboard
 #### 存储：
     rook-ceph  
 #### 包安装管理：
     helm
-#### 容器行为管理
-    falco
 ## 关闭selinux和防火墙
     sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config 
 

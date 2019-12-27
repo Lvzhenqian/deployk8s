@@ -33,4 +33,4 @@ class Config(object):
         self.SshPkey = self.cfg['Ssh'].get("Pkey","")
         self.SshPkeypass = self.cfg['Ssh'].get("Pkeypass","")
         self.GrafanaPassword = self.cfg["Kubeconf"].get("PrometheusGrafanaPass","TestAdmin567")
-        self.LoadBalancer = "127.0.0.1:5443"
+        self.LoadBalancer = "127.0.0.1:8443"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding:utf-8
-import os, toml, yaml, time
+import os, toml, yaml, time, docker, sys
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from .Base import BaseObject
 
@@ -22,7 +22,7 @@ class kubernetes(BaseObject):
         ssh = self.SSH(ip)
         ssh.push(shell, '/tmp/kubeadm.sh', ip)
         ssh.mkdirs(self.DockerData)
-        ssh.do_script('/bin/bash /tmp/kubeadm.sh')
+        ssh.do_script('/bin/bash /tmp/kubeadm.sh %s'%ip)
         return "%s done" % ip
 
     def __SetHostName(self, ip):
@@ -38,51 +38,29 @@ class kubernetes(BaseObject):
             for cmd in (setname, BackupHosts, InsertHosts):
                 ssh.runner(cmd)
 
-    def __CreateNginxHAConf(self):
-        self.logger.debug(u"开始生成nginx配置文件！！")
-        if not os.path.exists(self.tmp):
-            os.mkdir(self.tmp)
-        nginxconf = os.path.join(self.tmp, "nginx.conf")
-        if not os.path.exists(nginxconf):
-            server = "\n".join(["server %s:6443         max_fails=3 fail_timeout=3s;" % i for i in self.Masters])
-            Conf = '''user nginx;
-worker_processes auto;
-error_log /var/log/nginx/error.log;
-pid /run/nginx.pid;
-include /usr/share/nginx/modules/*.conf;
-worker_rlimit_nofile 65535;
-events {
-    use epoll;
-    worker_connections 65535;
-}
-
-stream {
-    upstream api-servers {
-        hash $remote_addr consistent;
-        %s
-    }
-
-    server {
-        listen %s;
-        proxy_connect_timeout 3s;
-        proxy_timeout 1800s;
-        proxy_pass api-servers;
-    }
-}''' % (server, self.LoadBalancer)
-            with open(nginxconf, 'w') as f:
-                f.write(Conf)
-        return nginxconf
-
-    def __MakeNginx(self, ip):
-        self.logger.debug(u"%s: 安装nginx并配置tcp负载均衡！！", ip)
-        confPath = self.__CreateNginxHAConf()
-        self.logger.debug(confPath)
-        with self.SSH(ip) as ssh:
-            ssh.runner("yum install -y nginx")
-            ssh.push(confPath, "/etc/nginx/nginx.conf", ip)
-            ssh.runner("systemctl start nginx")
-            ssh.runner("systemctl enable nginx")
-            ssh.runner("systemctl status nginx")
+    def __MakeProxyFromDockerSdk(self, ip):
+        self.logger.info(u"%s 启动apiserver 代理程序端口！！"%ip)
+        # client = docker.DockerClient(base_url='unix://var/run/docker.sock',timeout=10)
+        try:
+            client = docker.DockerClient(base_url="tcp://%s:6666" % ip, timeout=10)
+            exist = client.containers.list(filters={"name":"apiserver-proxy"})
+            if exist:
+                self.logger.debug(exist.pop().short_id)
+                return
+            proxy = client.containers.run(image='tecnativa/tcp-proxy', detach=True,
+                                          name="apiserver-proxy",
+                                          environment={"LISTEN": ":8443",
+                                                       "TIMEOUT_TUNNEL":"1800s",
+                                                       "TALK": " ".join([x + ":6443" for x in self.Masters])},
+                                          ports={'8443/tcp': 8443})
+            state = proxy.status
+            while state != "running":
+                self.logger.debug("proxy: %s -> %s"%(proxy.short_id,state))
+                time.sleep(10)
+                state = client.containers.get("apiserver-proxy").status
+        except Exception as e:
+            self.logger.error(e)
+            sys.exit(-1)
 
     def __CreateConfig(self):
         name, _ = self.LoadBalancer.split(':')
@@ -107,13 +85,13 @@ stream {
                          kind='KubeProxyConfiguration',
                          mode=self.ProxyMode)
         KubeLet = dict(apiVersion='kubelet.config.k8s.io/v1beta1',
-                         kind='KubeletConfiguration',
-                         MaxPods=300)
+                       kind='KubeletConfiguration',
+                       MaxPods=300)
         if not os.path.exists(self.tmp):
             os.mkdir(self.tmp)
         InitConfig = os.path.join(self.tmp, 'k8s.yaml')
         with open(InitConfig, mode='w') as f:
-            yaml.safe_dump_all([ClusterConfig, KubeProxy,KubeLet], stream=f, encoding="utf-8", allow_unicode=True,
+            yaml.safe_dump_all([ClusterConfig, KubeProxy, KubeLet], stream=f, encoding="utf-8", allow_unicode=True,
                                default_flow_style=False)
         return InitConfig
 
@@ -127,10 +105,9 @@ stream {
         ret, _ = ssh.runner("kubeadm token create --ttl 0 --print-join-command")
         # self.logger.debug(ret)
         get = ret.split(" ")
-        token = get[get.index("--token")+1]
-        Certhash = get[get.index("--discovery-token-ca-cert-hash")+1]
+        token = get[get.index("--token") + 1]
+        Certhash = get[get.index("--discovery-token-ca-cert-hash") + 1]
         self.logger.debug(get)
-        # _, _, _, _, token, _, Certhash = ret.split()
         return token, Certhash.strip("\r\n")
 
     def __Kubeconfig(self):
@@ -234,7 +211,8 @@ stream {
     def MakeMaster(self):
         self.logger.info("初始化Masters")
         with ThreadPoolExecutor(max_workers=len(self.Masters)) as pool:
-            wait([pool.submit(self.__MakeNginx, ip) for ip in self.Masters], timeout=3600, return_when=ALL_COMPLETED)
+            wait([pool.submit(self.__MakeProxyFromDockerSdk, ip) for ip in self.Masters], timeout=3600,
+                 return_when=ALL_COMPLETED)
 
         if len(self.Masters) > 1:
             self.__MakeMultiMaster()
@@ -260,7 +238,7 @@ stream {
         FailMaster = []
         with self.SSH(self.Masters[0]) as k8s:
             for ip in self.Masters[1:]:
-                state,_ = k8s.runner("kubectl get nodes|awk '/%s/{print $3}'"%self.Nodes[ip])
+                state, _ = k8s.runner("kubectl get nodes|awk '/%s/{print $3}'" % self.Nodes[ip])
                 if state.strip("\r\n") != "master":
                     FailMaster.append(ip)
         return FailMaster
@@ -276,7 +254,7 @@ stream {
             with self.SSH(ip) as ssh:
                 ssh.runner("kubeadm reset --force")
         # copy ca key
-        self.__CopyCrts(self.Masters[0],fail)
+        self.__CopyCrts(self.Masters[0], fail)
         # do add again
         for ip in fail:
             self.__JoinMaster(ip)
@@ -306,7 +284,7 @@ stream {
         pool = ThreadPoolExecutor()
         ips = self.__ExtendNodeIP()
         lst = self.__NotKubeletNodes(ips)
-        self.logger.debug("ips: %s -> doing: %s",ips,lst)
+        self.logger.debug("ips: %s -> doing: %s", ips, lst)
         # 安装服务器环境准备
         AllEnv = [pool.submit(self.Env, ip) for ip in lst]
         wait(AllEnv, timeout=3600, return_when=ALL_COMPLETED)
@@ -333,7 +311,7 @@ stream {
             for oj in nodes:
                 self.logger.debug(oj.result())
         with ThreadPoolExecutor() as pool:
-            wait([pool.submit(self.__MakeNginx, i) for i in DoIpList], timeout=3600, return_when=ALL_COMPLETED)
+            wait([pool.submit(self.__MakeProxyFromDockerSdk, i) for i in DoIpList], timeout=3600, return_when=ALL_COMPLETED)
         self.logger.info(u"添加node节点进k8s里！！")
         with ThreadPoolExecutor() as pool:
             ret = [pool.submit(self.__JoinNode, ip) for ip in DoIpList]
@@ -342,29 +320,15 @@ stream {
             self.logger.debug(ojs.result())
         self.logger.info("添加节点成功！！等待k8s初始化好节点。")
 
-    def _calico(self, kubectl):
+    def __canal(self, kubectl):
+        self.logger.info(u"开始安装canal到k8s里")
         os.chdir(self.ScriptPath)
-        PODip = '''sed -i -r '/CALICO_IPV4POOL_CIDR/{n;s#value: ".*"$#value: "%s"#}' ./k8s/calico/calico.yaml''' % self.PodCidr
-        MTU = '''sed -i 's/1440/{}/g' ./k8s/calico/calico.yaml'''.format(self.MTU)
-        for cmd in (PODip, MTU):
-            self.subPopen(cmd)
+        self.subPopen('''sed -i 's#PODADDRESS#%s#' ./k8s/canal/canal.yaml''' % self.PodCidr)
         ssh = self.SSH(kubectl)
-        ssh.mkdirs('/tmp/calico')
-        self._SSL_sender("./k8s/calico", '/tmp/calico', kubectl)
-        ssh.runner('kubectl create -f /tmp/calico')
-        self.logger.info("calico install successfully!")
-
-    def _flannel(self, kubectl):
-        self.logger.info(u"开始安装flannel到k8s里")
-        os.chdir(self.ScriptPath)
-        PODip = '''sed -i 's#PODADDRESS#%s#' ./k8s/flannel/kube-flannel.yml''' % self.PodCidr
-        for cmd in (PODip):
-            self.subPopen(cmd)
-        ssh = self.SSH(kubectl)
-        ssh.mkdirs('/tmp/flannel')
-        self._SSL_sender("./k8s/flannel", '/tmp/flannel', kubectl)
-        ssh.runner('kubectl create -f /tmp/flannel')
-        self.logger.info("flannel install successfully!")
+        ssh.mkdirs('/tmp/canal')
+        self._SSL_sender("./k8s/canal", '/tmp/canal', kubectl)
+        ssh.runner('kubectl create -f /tmp/canal')
+        self.logger.info("canal install successfully!")
 
     def _dashboard(self, kubectl):
         self.logger.info(u"开始安装kube-dashboard")
@@ -376,13 +340,19 @@ stream {
         ssh.runner('kubectl create -f /tmp/dashboard')
         self.CheckRuning(name="dashboard", ip=kubectl)
 
-
     def _MetricServer(self, ip):
         self.logger.info(u"开始安装metric-server到k8s里")
+        config = dict(apiService=dict(create=True),extraArgs={
+            "kubelet-insecure-tls": True,
+            "kubelet-preferred-address-types":"InternalIP,ExternalIP,Hostname"
+        })
+        Config = os.path.join(self.tmp, 'metrics-server.yaml')
+        with open(Config,mode="wt") as fd:
+            yaml.safe_dump(config,fd,encoding="utf-8", allow_unicode=True,default_flow_style=False)
         with self.SSH(ip) as ssh:
-            ssh.mkdirs('/tmp/metric-server')
-            self._SSL_sender("./k8s/metric-server", '/tmp/metric-server', ip)
-            ssh.runner('kubectl create -f /tmp/metric-server')
+            ssh.push(Config,"/root/metrics-server.yaml",ip)
+        with self.SSH(ip) as ssh:
+            return ssh.runner("/usr/bin/helm install metrics-server -f /root/metrics-server.yaml bitnami/metrics-server --namespace=kube-system")
 
     def _Prometheus(self, ip):
         self.logger.info(u"开始安装prometheus到k8s里")
@@ -431,41 +401,14 @@ stream {
         ssh.do_script("cd /tmp/ceph && /bin/bash /tmp/ceph/install.sh")
         self.logger.info("rook install successfully!")
 
-    def _kubeless(self, ip):
-        self.logger.info("开始安装kubeless程序")
-        with self.SSH(ip) as ssh:
-            ssh.mkdirs('/tmp/kubeless')
-            self._SSL_sender("./k8s/kubeless", '/tmp/kubeless', ip)
-            ssh.runner("kubectl create ns kubeless")
-            ssh.runner("chmod a+x /tmp/kubeless/kubeless")
-            ssh.runner("mv /tmp/kubeless/kubeless /bin/kubeless")
-            ssh.runner('kubectl create -f /tmp/kubeless')
-
-    def _falco(self, ip):
-        self.logger.info("开始安装falco程序")
-        with self.SSH(ip) as ssh:
-            ssh.mkdirs('/tmp/falco')
-            self._SSL_sender("./k8s/falco", '/tmp/falco', ip)
-            ssh.runner('kubectl create -f /tmp/falco/falco-account.yaml')
-            ssh.runner('kubectl create -f /tmp/falco/falco-service.yaml')
-            ssh.runner('kubectl create configmap falco-config --from-file=/tmp/falco/conf')
-            ssh.runner('kubectl create -f /tmp/falco/falco-daemonset-configmap.yaml')
-
     def _helm(self, kubectl):
         self.logger.info("开始安装helm程序")
         ssh = self.SSH(kubectl)
         ssh.push("./k8s/helm/helm", "/usr/bin/helm", kubectl)
         ssh.runner(r"chmod a+x /usr/bin/helm")
-        version, _ = ssh.runner(r'/usr/bin/helm version|head -1|egrep -o "v[0-9]+\.[0-9]+\.[0-9]"')
-        self.logger.debug(version)
-        ssh.runner("kubectl create serviceaccount --namespace kube-system tiller")
-        ssh.runner(
-            "kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller")
-        ssh.do_script("helm init --service-account tiller --upgrade -i registry.cn-hangzhou.aliyuncs.com/google_containers/tiller:%s "
-                      "--stable-repo-url http://mirror.azure.cn/kubernetes/charts/" % version.split("\r\n")[0])
+        ssh.runner("/usr/bin/helm repo add stable http://mirror.azure.cn/kubernetes/charts/")
         ssh.runner("/usr/bin/helm repo add bitnami https://charts.bitnami.com/bitnami")
         ssh.runner("/usr/bin/helm repo update")
-        self.CheckRuning("tiller", kubectl)
         self.logger.info("helm install successfully!")
 
     def __IngressNginx(self, ip, other=None):
@@ -489,33 +432,26 @@ stream {
         with self.SSH(ip) as ssh:
             ssh.push(filepath, '/root/nginxvalue.yaml', ip)
             ssh.runner(
-                "helm install -f /root/nginxvalue.yaml --name nginx --namespace nginx bitnami/nginx-ingress-controller")
+                "helm install -f /root/nginxvalue.yaml nginx --namespace nginx bitnami/nginx-ingress-controller")
             self.logger.info(u"重启kube-proxy，防止容器卡死")
-            ssh.do_script('''for i in $(kubectl -n kube-system get pods  -l k8s-app=kube-proxy|awk '/kube-proxy/{print $1}');do kubectl -n kube-system delete pod $i;done''')
+            ssh.do_script(
+                '''for i in $(kubectl -n kube-system get pods  -l k8s-app=kube-proxy|awk '/kube-proxy/{print $1}');do kubectl -n kube-system delete pod $i;done''')
         self.logger.info(u"Ingress安装成功")
 
-    def NetworkAddons(self, ip):
-        switch = {
-            "calico": self._calico,
-            "flannel": self._flannel
-        }
-        return switch[self.Network](ip)
 
     def Addons(self):
         ip = self.Masters[0]
         switchlist = {
             "ceph": self._rook,
-            "dashboard": self._dashboard,
-            "kubeless": self._kubeless,
-            "falco": self._falco,
             "prometheus": self._Prometheus
         }
-        self.NetworkAddons(ip)
+        self.__canal(ip)
+        self._dashboard(ip)
         self._helm(ip)
         self._MetricServer(ip)
-        for plugin in self.Plugins:
-            switchlist[plugin](ip)
-        self.__IngressNginx(ip)
+        # for plugin in self.Plugins:
+        #     switchlist[plugin](ip)
+        # self.__IngressNginx(ip)
 
     def __Reset(self, ip):
         with self.SSH(ip) as ssh:

@@ -1,4 +1,5 @@
 #!/bin/bash
+IPAddress="$1"
 Version="1.13.2"
 DockerVersion="3:docker-ce-18.09.2-3.el7.x86_64"
 DockerData="/data/docker"
@@ -45,15 +46,22 @@ yum versionlock docker-ce
 systemctl start docker
 tee /etc/docker/daemon.json <<-'EOF'
 {
-  "registry-mirrors": ["https://b4n0ghyv.mirror.aliyuncs.com"],
-  "max-concurrent-downloads": 10,
-  "log-driver": "json-file",
-  "log-opts": { "max-size": "10m" },
-  "storage-driver": "overlay2",
-  "storage-opts": ["overlay2.override_kernel_check=true"]
+    "log-driver": "json-file",
+    "log-opts": {
+    "max-size": "100m",
+    "max-file": "3"
+    },
+    "exec-opts": ["native.cgroupdriver=systemd"],
+    "max-concurrent-downloads": 10,
+    "max-concurrent-uploads": 10,
+    "registry-mirrors": ["https://sgn4c8bb.mirror.aliyuncs.com"],
+    "storage-driver": "overlay2",
+    "storage-opts": [
+    "overlay2.override_kernel_check=true"
+    ]
 }
 EOF
-sed -i 's@^ExecStart.*$@ExecStart=/usr/bin/dockerd --data-root '${DockerData}' --log-level=info@' /lib/systemd/system/docker.service
+sed -i 's@^ExecStart.*$@ExecStart=/usr/bin/dockerd --data-root '${DockerData}' -H fd:// -H tcp://'${IPAddress}':6666 --log-level=info@' /lib/systemd/system/docker.service
 systemctl daemon-reload
 systemctl restart docker
 cat > /etc/sysctl.d/docker.conf <<-EOF
