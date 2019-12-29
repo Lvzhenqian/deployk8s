@@ -26,7 +26,7 @@ stratumweight 0
 driftfile /var/lib/chrony/drift  
 rtcsync
 makestep 10 3
-allow ${server%.*}/24  
+allow ${server%.*}.0/24
 bindcmdaddress 127.0.0.1  
 bindcmdaddress ::1
 keyfile /etc/chrony.keys  
@@ -43,7 +43,7 @@ stratumweight 0
 driftfile /var/lib/chrony/drift  
 rtcsync  
 makestep 10 3  
-allow ${server%.*}/24 
+allow ${server%.*}.0/24
 bindcmdaddress 127.0.0.1  
 bindcmdaddress ::1  
 keyfile /etc/chrony.keys  

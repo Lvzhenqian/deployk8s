@@ -10,7 +10,7 @@ class kubernetes(BaseObject):
     def Env(self, ip):
         ssh = self.SSH(ip)
         ssh.push(os.path.join(self.ScriptPath, "k8s/init/env.sh"), '/tmp/env.sh', ip)
-        ssh.do_script('/bin/bash /tmp/env.sh %s'%ip)
+        ssh.do_script('/bin/bash /tmp/env.sh %s'%self.Masters[0])
         return "%s done" % ip
 
     def __RestartServer(self, ip):
@@ -49,6 +49,7 @@ class kubernetes(BaseObject):
                 return
             proxy = client.containers.run(image='tecnativa/tcp-proxy', detach=True,
                                           name="apiserver-proxy",
+                                          restart_policy={"Name","always"},
                                           environment={"LISTEN": ":8443",
                                                        "TIMEOUT_TUNNEL":"1800s",
                                                        "TALK": " ".join([x + ":6443" for x in self.Masters])},

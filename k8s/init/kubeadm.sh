@@ -25,7 +25,7 @@ tee /etc/docker/daemon.json <<-'EOF'
     "exec-opts": ["native.cgroupdriver=systemd"],
     "max-concurrent-downloads": 10,
     "max-concurrent-uploads": 10,
-    "registry-mirrors": ["https://sgn4c8bb.mirror.aliyuncs.com"],
+    "registry-mirrors": ["https://docker.mirrors.ustc.edu.cn/"],
     "storage-driver": "overlay2",
     "storage-opts": [
     "overlay2.override_kernel_check=true"
