@@ -1,33 +1,12 @@
 [Kubeconf]
 Version = "1.17.0"
-DockerVersion = "docker-ce-19.03.5-3.el7.x86_64"
-# 插件列表，helm 与 metric-server由于其他组件依赖所以必装
-Plugins = [
-    "ceph",
-    "prometheus",
-]
-# etcd docker 与kubelet等数据存储路径,默认值 /data。
-DataDir = "/data"
-# 网络插件选择 flannel 和 calico ,注意azure不支持calico
-NetworkAddons = "calico"
-# Calico MTU值, 默认1440 （阿里云1440|京东云1430）,选择calico需更改此值
-MTU = ""
-# prometheus 监控grafana管理员admin密码配置,默认值 TestAdmin567
-PrometheusGrafanaPass = "TestAdmin567"
-
 # 增加节点时要使用token 与证书hash值，部署时不必填写，部署完成后会回写配置文件。
 Token = ""
 CertHash = ""
 
-[Master]
-# k8s master集群地址
-IPS = [ 
-    "192.168.1.230"
-]
-
 [Node]
-# 左边是节点内网ip地址，右边是对应显示的node名称
-"192.168.1.230" = "kubeadm"
+# 左边为节点hostname ，右边为对应的节点ip，默认添加上 `master` 关键字的会部署master的资源,如果都没添加，则从node随机挑3个节点。
+"kubeadm" = "192.168.1.230"
 
 [Ssh]
 # ssh登陆端口，账号密码，请统一一个
@@ -36,3 +15,4 @@ Port = 22
 Username = "root"
 # root密码
 Password = "vagrant"
+Pkeypass = ""

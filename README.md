@@ -22,8 +22,6 @@
     prometheus、metric-server
 #### 显示页面：
     kubernetes-dashboard
-#### 存储：
-    rook-ceph  
 #### 包安装管理：
     helm
 ## 关闭selinux和防火墙

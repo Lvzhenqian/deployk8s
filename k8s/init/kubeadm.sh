@@ -25,7 +25,7 @@ tee /etc/docker/daemon.json <<-'EOF'
     "exec-opts": ["native.cgroupdriver=systemd"],
     "max-concurrent-downloads": 10,
     "max-concurrent-uploads": 10,
-    "registry-mirrors": ["https://docker.mirrors.ustc.edu.cn/"],
+    "registry-mirrors": ["https://sgn4c8bb.mirror.aliyuncs.com"],
     "storage-driver": "overlay2",
     "storage-opts": [
     "overlay2.override_kernel_check=true"
@@ -56,7 +56,7 @@ yum makecache
 package=$(yum search --showduplicates kubeadm kubelet kubectl|awk '/'${Version}'/{print $1}')
 yum install -y ${package}
 mkdir -p ${KubeletData}
-sed -i -r 's#KUBELET_EXTRA_ARGS=.*$#KUBELET_EXTRA_ARGS="--root-dir='${KubeletData}'"#g' /etc/sysconfig/kubelet
+sed -i -r 's#KUBELET_EXTRA_ARGS=.*$#KUBELET_EXTRA_ARGS="--root-dir='${KubeletData}' --cgroup-driver=systemd"#g' /etc/sysconfig/kubelet
 systemctl daemon-reload
 systemctl restart kubelet
 systemctl enable kubelet

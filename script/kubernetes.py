@@ -27,8 +27,8 @@ class kubernetes(BaseObject):
 
     def __SetHostName(self, ip):
         self.logger.info(u"%s 即将配置并修改hosts文件，旧hosts保存为 /etc/hosts_old !!" % ip)
-        hostname = self.Perfix + self.Nodes[ip]
-        hosts = '\n'.join([" ".join((node, self.Perfix + name)) for node, name in self.Nodes.items()])
+        hostname = self.Perfix + self.FindKeyFromValue(self.Nodes, ip)
+        hosts = '\n'.join([" ".join((node, self.Perfix + name)) for name, node in self.Nodes.items()])
         header = '''127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
 ::1         localhost localhost.localdomain localhost6 localhost6.localdomain6\n'''
         setname = "hostnamectl set-hostname %s" % hostname
@@ -47,9 +47,11 @@ class kubernetes(BaseObject):
             if exist:
                 self.logger.debug(exist.pop().short_id)
                 return
+            pull = client.images.pull("tecnativa/tcp-proxy")
+
             proxy = client.containers.run(image='tecnativa/tcp-proxy', detach=True,
                                           name="apiserver-proxy",
-                                          restart_policy={"Name","always"},
+                                          restart_policy={"Name":"always"},
                                           environment={"LISTEN": ":8443",
                                                        "TIMEOUT_TUNNEL":"1800s",
                                                        "TALK": " ".join([x + ":6443" for x in self.Masters])},
@@ -67,7 +69,7 @@ class kubernetes(BaseObject):
         name, _ = self.LoadBalancer.split(':')
         certs = set(self.Masters)
         certs.add(name)
-        ClusterConfig = dict(apiVersion='kubeadm.k8s.io/v1beta1', kind='ClusterConfiguration',
+        ClusterConfig = dict(apiVersion='kubeadm.k8s.io/v1beta2', kind='ClusterConfiguration',
                              etcd=dict(local=dict(imageRepository='gcr.azk8s.cn/google_containers',
                                                   dataDir='/data/etcd')),
                              networking=dict(serviceSubnet=self.ServiceCidr, podSubnet=self.PodCidr),
@@ -233,13 +235,13 @@ class kubernetes(BaseObject):
         self.logger.info(u"去掉master不调度规则，减少机器使用")
         # 去掉master不调度规则
         for ip in self.Masters:
-            self.__UntaintNode(ip, self.Perfix + self.Nodes[ip])
+            self.__UntaintNode(ip, self.Perfix + self.FindKeyFromValue(self.Nodes, ip))
 
     def __CheckMasters(self):
         FailMaster = []
         with self.SSH(self.Masters[0]) as k8s:
             for ip in self.Masters[1:]:
-                state, _ = k8s.runner("kubectl get nodes|awk '/%s/{print $3}'" % self.Nodes[ip])
+                state, _ = k8s.runner("kubectl get nodes|awk '/%s/{print $3}'" % self.FindKeyFromValue(self.Nodes, ip))
                 if state.strip("\r\n") != "master":
                     FailMaster.append(ip)
         return FailMaster
@@ -264,10 +266,10 @@ class kubernetes(BaseObject):
         with self.SSH(self.Masters[0]) as k8s:
             k8snodes, _ = k8s.runner("kubectl get nodes|awk '/k8s/{print $1}'")
         Haveing = set([name.strip(self.Perfix) for name in k8snodes.split("\r\n") if name])
-        ConfigNodes = set(self.Nodes.values())
+        ConfigNodes = set(self.Nodes.keys())
         self.logger.debug((Haveing, ConfigNodes))
         names = ConfigNodes.symmetric_difference(Haveing)
-        return [k for k, v in self.Nodes.items() for name in names if name == v and k not in self.Masters]
+        return [k for k,v in self.Nodes.items() for name in names if name == k and v not in self.Masters ]
 
     def __NotKubeletNodes(self, iplist):
         NotKubelet = []
@@ -360,27 +362,15 @@ class kubernetes(BaseObject):
         if not os.path.exists(self.tmp):
             os.mkdir(self.tmp)
         ValueFile = {
-            "alertmanager": {
-                'alertmanagerSpec': {'image': dict(repository="registry.matchvs.com/k8s/alertmanager", tag="v0.16.1")}
-            },
-            "grafana": {'adminPassword': self.GrafanaPassword,
-                        "image": dict(repository="registry.matchvs.com/k8s/grafana", tag="6.0.2")},
-            "prometheusOperator": {'cleanupCustomResource': True,
-                                   'image': dict(
-                                       repository="registry.matchvs.com/k8s/prometheus-operator", tag="v0.29.0"),
-                                   'configmapReloadImage': dict(
-                                       repository="registry.matchvs.com/k8s/configmap-reload", tag="v0.0.1"),
-                                   'prometheusConfigReloaderImage': dict(
-                                       repository="registry.matchvs.com/k8s/prometheus-config-reloader", tag="v0.29.0"),
-                                   "hyperkubeImage": dict(
-                                       repository="registry.matchvs.com/k8s/hyperkube", tag="v1.12.1")
-                                   },
-            "prometheus": dict(
-                prometheusSpec=dict(image=dict(repository="registry.matchvs.com/k8s/prometheus", tag="v2.7.1"))),
-            "kube-state-metrics": {'image': dict(repository="registry.matchvs.com/k8s/kube-state-metrics", tag="v1.5.0")
-                                   },
-            "prometheus-node-exporter": {"image": dict(repository="registry.matchvs.com/k8s/node-exporter",
-                                                       tag="v0.17.0")}
+            "alertmanager": dict(alertmanagerSpec={'image': dict(repository="quay.azk8s.cn/prometheus/alertmanager")}),
+            "prometheusOperator": dict(cleanupCustomResource=True,
+                                       image=dict(repository="quay.azk8s.cn/coreos/prometheus-operator"),
+                                       configmapReloadImage=dict(repository="quay.azk8s.cn/coreos/configmap-reload"),
+                                       prometheusConfigReloaderImage=dict(repository="quay.azk8s.cn/coreos/prometheus-config-reloader"),
+                                       hyperkubeImage=dict(repository="gcr.azk8s.cn/google_containers/hyperkube")),
+            "prometheus": dict(prometheusSpec=dict(image=dict(repository="quay.azk8s.cn/prometheus/prometheus"))),
+            "kube-state-metrics": dict(image=dict(repository="quay.azk8s.cn/coreos/kube-state-metrics")),
+            "prometheus-node-exporter": dict(image=dict(repository="quay.azk8s.cn/prometheus/node-exporter"))
         }
         pro = os.path.join(self.tmp, 'prometheus.yaml')
         with open(pro, mode='w') as f:
@@ -388,19 +378,11 @@ class kubernetes(BaseObject):
                            default_flow_style=False)
         with self.SSH(ip) as ssh:
             ssh.push(pro, "/tmp/prometheus.yaml", ip)
-            ssh.do_script("/usr/bin/helm repo update")
+            ssh.runner("kubectl create ns prometheus")
             ssh.do_script(
-                "/usr/bin/helm install -f /tmp/prometheus.yaml --namespace prometheus --wait --timeout 600"
-                " --name prometheus stable/prometheus-operator --version 5.0.10")
+                "/usr/bin/helm install prometheus -f /tmp/prometheus.yaml  --wait --namespace prometheus"
+                " stable/prometheus-operator --version 8.5.0 ")
         return self.logger.info("prometheus install successfully!")
-
-    def _rook(self, kubectl):
-        self.logger.info("开始安装rook程序")
-        ssh = self.SSH(kubectl)
-        ssh.mkdirs('/tmp/ceph')
-        self._SSL_sender("./k8s/ceph", '/tmp/ceph', kubectl)
-        ssh.do_script("cd /tmp/ceph && /bin/bash /tmp/ceph/install.sh")
-        self.logger.info("rook install successfully!")
 
     def _helm(self, kubectl):
         self.logger.info("开始安装helm程序")
@@ -432,27 +414,20 @@ class kubernetes(BaseObject):
                            default_flow_style=False)
         with self.SSH(ip) as ssh:
             ssh.push(filepath, '/root/nginxvalue.yaml', ip)
+            ssh.runner("kubectl create ns nginx")
             ssh.runner(
-                "helm install -f /root/nginxvalue.yaml nginx --namespace nginx bitnami/nginx-ingress-controller")
-            self.logger.info(u"重启kube-proxy，防止容器卡死")
-            ssh.do_script(
-                '''for i in $(kubectl -n kube-system get pods  -l k8s-app=kube-proxy|awk '/kube-proxy/{print $1}');do kubectl -n kube-system delete pod $i;done''')
+                "helm install nginx -f /root/nginxvalue.yaml --namespace nginx bitnami/nginx-ingress-controller")
         self.logger.info(u"Ingress安装成功")
 
 
     def Addons(self):
         ip = self.Masters[0]
-        switchlist = {
-            "ceph": self._rook,
-            "prometheus": self._Prometheus
-        }
         self.__canal(ip)
         self._dashboard(ip)
         self._helm(ip)
         self._MetricServer(ip)
-        # for plugin in self.Plugins:
-        #     switchlist[plugin](ip)
-        # self.__IngressNginx(ip)
+        self._Prometheus(ip)
+        self.__IngressNginx(ip)
 
     def __Reset(self, ip):
         with self.SSH(ip) as ssh:

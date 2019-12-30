@@ -35,10 +35,26 @@ class BaseObject(Config):
             self.SSH = partial(SSH, port=int(self.SshPort),user=self.SshUsername,pKey=self.SshPkey,keypass=keypass)
         else:
             self.SSH = partial(SSH, port=int(self.SshPort),user=self.SshUsername,passwd=self.SshPassword)
-        self.ALL_IP = set(self.Nodes.keys())
-        self.ALL_IP.update(self.Masters)
+        self.ALL_IP = set(self.Nodes.values())
+        self.Masters = self.ChooseMasters()
         self.logger.debug(self.ALL_IP)
 
+    def ChooseMasters(self):
+        if len(self.Nodes.values()) % 2 != 1:
+            self.logger.error(u"请使用奇数节点！！否则无法部署集群！")
+            sys.exit(-1)
+        masters = []
+        for name,node in self.Nodes.items():
+            if "master" in name:
+                masters.append(node)
+        if not masters and len(self.Nodes.values()) >= 3:
+            masters.extend(self.Nodes.values()[0:3])
+        elif not masters:
+            masters.extend(self.Nodes.values())
+        return masters
+
+    def FindKeyFromValue(self,dic, v):
+        return {value:key for key,value in dic.items()}[v]
 
     def _Systemd_Check(self, ip, name):
         ssh = self.SSH(ip)

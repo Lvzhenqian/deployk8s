@@ -29,9 +29,7 @@ makestep 10 3
 allow ${server%.*}.0/24
 bindcmdaddress 127.0.0.1  
 bindcmdaddress ::1
-keyfile /etc/chrony.keys  
-commandkey 1  
-generatecommandkey  
+keyfile /etc/chrony.keys
 noclientlog  
 logchange 0.5  
 logdir /var/log/chrony  
@@ -46,9 +44,7 @@ makestep 10 3
 allow ${server%.*}.0/24
 bindcmdaddress 127.0.0.1  
 bindcmdaddress ::1  
-keyfile /etc/chrony.keys  
-commandkey 1  
-generatecommandkey  
+keyfile /etc/chrony.keys
 noclientlog  
 logchange 0.5  
 logdir /var/log/chrony  
@@ -61,8 +57,8 @@ EOF
     systemctl status chronyd
 }
 
-# 升级系统到最新版本软件
-yum update -y
+## 升级系统到最新版本软件
+#yum update -y
 
 # 安装基础软件
 Yum_software="
@@ -186,6 +182,3 @@ systemctl stop firewalld
 systemctl disable firewalld
 /sbin/iptables-save > /root/iptables.bak
 iptables -F &&  iptables -X &&  iptables -F -t nat &&  iptables -X -t nat && iptables -P FORWARD ACCEPT
-/usr/sbin/ntpdate cn.ntp.org.cn
-/usr/sbin/clock -w
-echo "10 * * * * /usr/sbin/ntpdate cn.ntp.org.cn &>/dev/null;/usr/sbin/clock -w" >> /var/spool/cron/root
