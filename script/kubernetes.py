@@ -47,15 +47,12 @@ class kubernetes(BaseObject):
             if exist:
                 self.logger.debug(exist.pop().short_id)
                 return
-            pull = client.images.pull("tecnativa/tcp-proxy")
-
-            proxy = client.containers.run(image='tecnativa/tcp-proxy', detach=True,
+            proxy = client.containers.run(image='ggangelo/apiproxy:v1.0', detach=True,
                                           name="apiserver-proxy",
                                           restart_policy={"Name":"always"},
                                           environment={"LISTEN": ":8443",
-                                                       "TIMEOUT_TUNNEL":"1800s",
-                                                       "TALK": " ".join([x + ":6443" for x in self.Masters])},
-                                          ports={'8443/tcp': 8443})
+                                                       "BACKEND": ",".join([x + ":6443" for x in self.Masters])},
+                                          ports={'8443/tcp': 8443,'9000/tcp':9000})
             state = proxy.status
             while state != "running":
                 self.logger.debug("proxy: %s -> %s"%(proxy.short_id,state))
