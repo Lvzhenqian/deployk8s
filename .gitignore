@@ -1,2 +1,4 @@
 .idea
 .python-version
+.DS_Store
+*/.DS_Store

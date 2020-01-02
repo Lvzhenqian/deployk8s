@@ -1,8 +1,9 @@
 [Kubeconf]
 Version = "1.17.0"
-# 增加节点时要使用token 与证书hash值，部署时不必填写，部署完成后会回写配置文件。
+# 增加节点时要使用token 与证书hash值，部署时不必填写，部署完成后会回写配置文件。dashboard管理员token回写
 Token = ""
 CertHash = ""
+DashboardToken = ""
 
 [Node]
 # 左边为节点hostname ，右边为对应的节点ip，默认添加上 `master` 关键字的会部署master的资源,如果都没添加，则从node随机挑3个节点。

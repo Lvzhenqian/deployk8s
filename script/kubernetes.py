@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding:utf-8
 import os, toml, yaml, time, docker, sys
+from base64 import b64decode
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from .Base import BaseObject
 
@@ -338,7 +339,20 @@ class kubernetes(BaseObject):
         ssh.mkdirs(tmp)
         self._SSL_sender("./k8s/dashboard", '/tmp/dashboard', kubectl)
         ssh.runner('kubectl create -f /tmp/dashboard')
+        data,state = ssh.runner("kubectl get secret $(kubectl get sa cluster-admin -o jsonpath={.secrets[0].name}) -o jsonpath={.data.token}")
+        if state:
+            self.cfg['Kubeconf']["DashboardToken"] = b64decode(data)
+            with open(self.ConfPath, mode="w") as fd:
+                toml.dump(self.cfg, fd)
         self.CheckRuning(name="dashboard", ip=kubectl)
+
+    def __CertManager(self, kubectl):
+        self.logger.info(u"开始安装Cert-manager")
+        os.chdir(self.ScriptPath)
+        with self.SSH(kubectl) as ssh:
+            ssh.push("./k8s/cert-manager/cert-manager.yaml","/tmp/cert-manager.yaml")
+            ssh.runner("kubectl create --validate=false --save-config -f /tmp/cert-manager.yaml")
+        self.logger.info("安装cert-manager成功！！")
 
     def _MetricServer(self, ip):
         self.logger.info(u"开始安装metric-server到k8s里")
@@ -423,6 +437,7 @@ class kubernetes(BaseObject):
         self._dashboard(ip)
         self._helm(ip)
         self._MetricServer(ip)
+        self.__CertManager(ip)
         self._Prometheus(ip)
         self.__IngressNginx(ip)
 

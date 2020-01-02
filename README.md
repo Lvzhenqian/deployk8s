@@ -24,6 +24,8 @@
     kubernetes-dashboard
 #### 包安装管理：
     helm
+#### 证书管理
+    cert-manager
 ## 关闭selinux和防火墙
     sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config 
 
