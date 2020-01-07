@@ -338,8 +338,8 @@ class kubernetes(BaseObject):
         ssh = self.SSH(kubectl)
         ssh.mkdirs(tmp)
         self._SSL_sender("./k8s/dashboard", '/tmp/dashboard', kubectl)
-        ssh.runner('kubectl create -f /tmp/dashboard')
-        data,state = ssh.runner("kubectl get secret $(kubectl get sa cluster-admin -o jsonpath={.secrets[0].name}) -o jsonpath={.data.token}")
+        ssh.runner('kubectl create --save-config -f /tmp/dashboard/dashboard.yaml')
+        data,state = ssh.runner("kubectl -n kubernetes-dashboard get secret $(kubectl -n kubernetes-dashboard get sa cluster-admin -o jsonpath={.secrets[0].name}) -o jsonpath={.data.token}")
         if state:
             self.cfg['Kubeconf']["DashboardToken"] = b64decode(data)
             with open(self.ConfPath, mode="w") as fd:
@@ -348,10 +348,13 @@ class kubernetes(BaseObject):
 
     def __CertManager(self, kubectl):
         self.logger.info(u"开始安装Cert-manager")
+        self.logger.debug(os.getcwd())
         os.chdir(self.ScriptPath)
         with self.SSH(kubectl) as ssh:
-            ssh.push("./k8s/cert-manager/cert-manager.yaml","/tmp/cert-manager.yaml")
-            ssh.runner("kubectl create --validate=false --save-config -f /tmp/cert-manager.yaml")
+            # ssh.push("./k8s/cert-manager/cert-manager.yaml","/tmp/cert-manager.yaml")
+            ssh.mkdirs("/tmp/cert-manager")
+            self._SSL_sender("k8s/cert-manager","/tmp/cert-manager",kubectl)
+            ssh.runner("kubectl create --validate=false --save-config -f /tmp/cert-manager")
         self.logger.info("安装cert-manager成功！！")
 
     def _MetricServer(self, ip):
@@ -433,6 +436,8 @@ class kubernetes(BaseObject):
 
     def Addons(self):
         ip = self.Masters[0]
+        if not os.path.exists(self.tmp):
+            os.mkdir(self.tmp)
         self.__canal(ip)
         self._dashboard(ip)
         self._helm(ip)
