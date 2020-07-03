@@ -68,7 +68,7 @@ class kubernetes(BaseObject):
         certs = set(self.Masters)
         certs.add(name)
         ClusterConfig = dict(apiVersion='kubeadm.k8s.io/v1beta2', kind='ClusterConfiguration',
-                             etcd=dict(local=dict(imageRepository='gcr.azk8s.cn/google_containers',
+                             etcd=dict(local=dict(imageRepository=self.RegistryMirror,
                                                   dataDir='/data/etcd')),
                              networking=dict(serviceSubnet=self.ServiceCidr, podSubnet=self.PodCidr),
                              dns=dict(type='CoreDNS', imageRepository='coredns'), kubernetesVersion=self.Version,
@@ -80,7 +80,7 @@ class kubernetes(BaseObject):
                                  },
                                  certSANs=list(certs),
                                  timeoutForControlPlane='4m0s'),
-                             imageRepository='gcr.azk8s.cn/google_containers',
+                             imageRepository=self.RegistryMirror,
                              useHyperKubeImage=False, clusterName='kubernetes')
         KubeProxy = dict(apiVersion='kubeproxy.config.k8s.io/v1alpha1',
                          kind='KubeProxyConfiguration',
@@ -280,6 +280,12 @@ class kubernetes(BaseObject):
                 continue
         return NotKubelet
 
+    def RepliceFile(self,yamlFile):
+        self.subPopen('''sed -i 's#%s#%s#' %s''' % ("quay.azk8s.cn",self.QuayioMirror,yamlFile))
+        self.subPopen('''sed -i 's#%s#%s#' %s''' % ("quay.io",self.QuayioMirror,yamlFile))
+        self.subPopen('''sed -i 's#%s#%s#' %s''' % ("k8s.gcr.io",self.RegistryMirror,yamlFile))
+
+
     def ExtendEnv(self):
         self.logger.warning("扩展node,配置Node环境！！，完成后会重启node")
         pool = ThreadPoolExecutor()
@@ -324,6 +330,7 @@ class kubernetes(BaseObject):
     def __canal(self, kubectl):
         self.logger.info(u"开始安装canal到k8s里")
         os.chdir(self.ScriptPath)
+        self.RepliceFile("./k8s/canal/canal.yaml")
         self.subPopen('''sed -i 's#PODADDRESS#%s#' ./k8s/canal/canal.yaml''' % self.PodCidr)
         ssh = self.SSH(kubectl)
         ssh.mkdirs('/tmp/canal')
@@ -337,6 +344,7 @@ class kubernetes(BaseObject):
         tmp = '/tmp/dashboard'
         ssh = self.SSH(kubectl)
         ssh.mkdirs(tmp)
+        self.RepliceFile("./k8s/dashboard/dashboard.yaml")
         self._SSL_sender("./k8s/dashboard", '/tmp/dashboard', kubectl)
         ssh.runner('kubectl create --save-config -f /tmp/dashboard/dashboard.yaml')
         data,state = ssh.runner("kubectl -n kubernetes-dashboard get secret $(kubectl -n kubernetes-dashboard get sa cluster-admin -o jsonpath={.secrets[0].name}) -o jsonpath={.data.token}")
@@ -350,6 +358,7 @@ class kubernetes(BaseObject):
         self.logger.info(u"开始安装Cert-manager")
         self.logger.debug(os.getcwd())
         os.chdir(self.ScriptPath)
+        self.RepliceFile("./k8s/cert-manager/cert-manager.yaml")
         with self.SSH(kubectl) as ssh:
             # ssh.push("./k8s/cert-manager/cert-manager.yaml","/tmp/cert-manager.yaml")
             ssh.mkdirs("/tmp/cert-manager")
@@ -376,15 +385,15 @@ class kubernetes(BaseObject):
         if not os.path.exists(self.tmp):
             os.mkdir(self.tmp)
         ValueFile = {
-            "alertmanager": dict(alertmanagerSpec={'image': dict(repository="quay.azk8s.cn/prometheus/alertmanager")}),
+            "alertmanager": dict(alertmanagerSpec={'image': dict(repository=self.QuayioMirror + "/prometheus/alertmanager")}),
             "prometheusOperator": dict(cleanupCustomResource=True,
-                                       image=dict(repository="quay.azk8s.cn/coreos/prometheus-operator"),
-                                       configmapReloadImage=dict(repository="quay.azk8s.cn/coreos/configmap-reload"),
-                                       prometheusConfigReloaderImage=dict(repository="quay.azk8s.cn/coreos/prometheus-config-reloader"),
-                                       hyperkubeImage=dict(repository="gcr.azk8s.cn/google_containers/hyperkube")),
-            "prometheus": dict(prometheusSpec=dict(image=dict(repository="quay.azk8s.cn/prometheus/prometheus"))),
-            "kube-state-metrics": dict(image=dict(repository="quay.azk8s.cn/coreos/kube-state-metrics")),
-            "prometheus-node-exporter": dict(image=dict(repository="quay.azk8s.cn/prometheus/node-exporter"))
+                                       image=dict(repository=self.QuayioMirror + "/coreos/prometheus-operator"),
+                                       configmapReloadImage=dict(repository=self.QuayioMirror + "/coreos/configmap-reload"),
+                                       prometheusConfigReloaderImage=dict(repository=self.QuayioMirror + "/coreos/prometheus-config-reloader"),
+                                       hyperkubeImage=dict(repository=self.RegistryMirror+ "/hyperkube")),
+            "prometheus": dict(prometheusSpec=dict(image=dict(repository=self.QuayioMirror + "/prometheus/prometheus"))),
+            "kube-state-metrics": dict(image=dict(repository=self.QuayioMirror + "/coreos/kube-state-metrics")),
+            "prometheus-node-exporter": dict(image=dict(repository=self.QuayioMirror + "/prometheus/node-exporter"))
         }
         pro = os.path.join(self.tmp, 'prometheus.yaml')
         with open(pro, mode='w') as f:

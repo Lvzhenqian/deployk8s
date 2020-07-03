@@ -109,7 +109,10 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-elrepo.org
 protect=0
 EOF
 yum makecache
-KernelUpgrade="kernel-lt kernel-lt-devel"
+KernelUpgrade="
+kernel-ml-5.5.13-1.el7.elrepo.x86_64 
+kernel-ml-devel-5.5.13-1.el7.elrepo.x86_64
+"
 yum install -y ${KernelUpgrade}
 sed -i 's/GRUB_DEFAULT.*$/GRUB_DEFAULT=0/g' /etc/default/grub
 grub2-mkconfig -o /boot/grub2/grub.cfg

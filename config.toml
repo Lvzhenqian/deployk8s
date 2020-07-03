@@ -1,5 +1,5 @@
 [Kubeconf]
-Version = "1.17.0"
+Version = "1.18.5"
 # 增加节点时要使用token 与证书hash值，部署时不必填写，部署完成后会回写配置文件。dashboard管理员token回写
 Token = ""
 CertHash = ""
