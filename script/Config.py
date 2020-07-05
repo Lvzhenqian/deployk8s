@@ -30,5 +30,5 @@ class Config(object):
         self.SshPkey = self.cfg['Ssh'].get("Pkey","")
         self.SshPkeypass = self.cfg['Ssh'].get("Pkeypass","")
         self.LoadBalancer = "127.0.0.1:8443"
-        self.RegistryMirror = self.cfg["Kubeconf"].get("RegistryMirror","mirrorgooglecontainers")
+        self.RegistryMirror = self.cfg["Kubeconf"].get("RegistryMirror","ggangelo")
         self.QuayioMirror = self.cfg["Kubeconf"].get("QuayioMirror","quay-mirror.qiniu.com")
