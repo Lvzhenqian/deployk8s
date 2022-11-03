@@ -14,7 +14,7 @@ idna==2.8
 iniparse==0.4
 ipaddress==1.0.16
 kitchen==1.1.1
-paramiko==2.4.2
+paramiko==2.10.1
 progressbar==2.5
 pyasn1==0.4.4
 pycparser==2.19
