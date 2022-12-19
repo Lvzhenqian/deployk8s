@@ -1,7 +1,7 @@
 asn1crypto==0.24.0
 backports.ssl-match-hostname==3.5.0.1
 bcrypt==3.1.4
-certifi==2019.11.28
+certifi==2022.12.7
 cffi==1.11.5
 colorlog==3.1.4
 configobj==4.7.2
